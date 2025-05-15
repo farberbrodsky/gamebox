@@ -1,14 +1,39 @@
 const std = @import("std");
+const posix = std.posix;
 const linux = std.os.linux;
-const c = @cImport({
-    @cInclude("string.h");
-});
 
 const STACK_SIZE = 1024 * 1024;
 
-pub fn evil_twin(arg: usize) callconv(.C) u8 {
-    _ = arg;
-    std.debug.print("I am a child!\n", .{});
+fn wait_for_exit(child_pid: linux.pid_t) !u8 {
+    var wstatus: u32 = undefined;
+    while (true) {
+        const waitpid_out = linux.waitpid(@intCast(child_pid), &wstatus, 0);
+        if (waitpid_out != child_pid) {
+            std.debug.print("waitpid error\n", .{});
+            linux.exit(1);
+        }
+
+        if (linux.W.IFEXITED(wstatus) or linux.W.IFSIGNALED(wstatus))
+            break;
+    }
+
+    if (linux.W.IFEXITED(wstatus))
+        return linux.W.EXITSTATUS(wstatus)
+    else
+        return error.SignalError;
+}
+
+pub fn evil_twin(fd: usize) callconv(.C) u8 {
+    var buf: [8]u8 = undefined;
+
+    // wait for newuidmap
+    _ = linux.read(@intCast(fd), &buf, 8);
+
+    std.debug.print("I am a child! {d}\n", .{linux.getuid()});
+    _ = linux.setuid(0);
+    std.debug.print("I am a child yet again! {d}\n", .{linux.getuid()});
+    const aaaa_fd = linux.open("/tmp/aaaa", .{ .ACCMODE = .WRONLY, .CREAT = true }, 0o777);
+    _ = linux.close(@intCast(aaaa_fd));
     return 3;
 }
 
@@ -28,27 +53,46 @@ pub fn main() !void {
     // clone with a new stack, signal SIGCHLD, and new UTS namespace
     var ptid: i32 = undefined;
     var ctid: i32 = undefined;
-    const child_pid: isize = @bitCast(linux.clone(evil_twin, stack_top, linux.CLONE.NEWUTS | linux.SIG.CHLD, 0, &ptid, 0, &ctid));
+    const event_fd = linux.eventfd(0, 0);
+    const child_pid: isize = @bitCast(linux.clone(evil_twin, stack_top, linux.CLONE.NEWUSER | linux.SIG.CHLD, event_fd, &ptid, 0, &ctid));
     if (child_pid < 0) {
         std.debug.print("child pid {d}\n", .{child_pid});
-        const st = c.strerror(@intCast(-child_pid));
-        std.debug.print("child str {s}\n", .{st});
         return error.PastenError;
     }
 
     std.debug.print("child {d}\n", .{child_pid});
 
-    var wstatus: u32 = undefined;
-    while (true) {
-        const waitpid_out = linux.waitpid(@intCast(child_pid), &wstatus, 0);
-        if (waitpid_out != child_pid)
-            return error.PastenError;
+    // Call newuidmap
+    const fork_pid: isize = @bitCast(linux.fork());
+    if (fork_pid == 0) {
+        const my_loweruid = 100000;
+        const my_count = 128;
 
-        if (linux.W.IFEXITED(wstatus) or linux.W.IFSIGNALED(wstatus))
-            break;
+        var buffer: [128]u8 = undefined;
+        var args_allocator = std.heap.FixedBufferAllocator.init(&buffer);
+
+        const pid_str = std.fmt.allocPrintZ(args_allocator.allocator(), "{d}", .{child_pid}) catch linux.exit(1);
+        const loweruid_str = std.fmt.allocPrintZ(args_allocator.allocator(), "{d}", .{my_loweruid}) catch linux.exit(1);
+        const count_str = std.fmt.allocPrintZ(args_allocator.allocator(), "{d}", .{my_count}) catch linux.exit(1);
+
+        const arr: [6:null]?[*:0]const u8 = .{ "newuidmap", pid_str, "0", loweruid_str, count_str, null };
+        const env: [1:null]?[*:0]const u8 = .{null};
+
+        posix.execvpeZ("newuidmap", &arr, &env) catch linux.exit(1);
+        linux.exit(1);
+    } else if (fork_pid < 0) {
+        return error.ForkError;
     }
 
-    std.debug.print("No, I am your father.\n", .{});
+    // Wait for it to finish
+    const exit_status = try wait_for_exit(@intCast(fork_pid));
+    if (exit_status != 0) return error.PastenError;
+    // Resume child
+    var buf: [8]u8 = undefined;
+    (&buf).* = @bitCast(@as(u64, 1));
+    const write_res = linux.write(@intCast(event_fd), &buf, buf.len);
+    if (write_res != 8) return error.PastenError;
+    // done!
 }
 
 test "simple test" {
