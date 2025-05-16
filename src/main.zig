@@ -2,64 +2,61 @@ const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
 
-const STACK_SIZE = 1024 * 1024;
-
-fn wait_for_exit(child_pid: linux.pid_t) !u8 {
-    var wstatus: u32 = undefined;
+fn wait_for_exit(child_pid: posix.pid_t) error{SignalError}!u8 {
     while (true) {
-        const waitpid_out = linux.waitpid(@intCast(child_pid), &wstatus, 0);
-        if (waitpid_out != child_pid) {
+        // this handles EINTR internally
+        const waitpid_out = posix.waitpid(@intCast(child_pid), 0);
+
+        if (waitpid_out.pid != child_pid) {
             std.debug.print("waitpid error\n", .{});
-            linux.exit(1);
+            posix.exit(1);
         }
 
-        if (linux.W.IFEXITED(wstatus) or linux.W.IFSIGNALED(wstatus))
-            break;
+        if (posix.W.IFEXITED(waitpid_out.status)) {
+            return posix.W.EXITSTATUS(waitpid_out.status);
+        } else if (posix.W.IFSIGNALED(waitpid_out.status)) {
+            return error.SignalError;
+        }
+        // otherwise: keep going
     }
-
-    if (linux.W.IFEXITED(wstatus))
-        return linux.W.EXITSTATUS(wstatus)
-    else
-        return error.SignalError;
 }
 
-pub fn evil_twin(fd: usize) callconv(.C) u8 {
+fn do_namespaced_child(fd: i32) noreturn {
     var buf: [8]u8 = undefined;
 
     // wait for newuidmap
+    // no error handling because it's an eventfd
     _ = linux.read(@intCast(fd), &buf, 8);
 
     std.debug.print("I am a child! {d}\n", .{linux.getuid()});
     _ = linux.setuid(0);
     std.debug.print("I am a child yet again! {d}\n", .{linux.getuid()});
     const aaaa_fd = linux.open("/tmp/aaaa", .{ .ACCMODE = .WRONLY, .CREAT = true }, 0o777);
-    _ = linux.close(@intCast(aaaa_fd));
-    return 3;
+    posix.close(@intCast(aaaa_fd));
+    posix.exit(0);
 }
 
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
 
-    const stack_ptr = linux.mmap(null, STACK_SIZE, linux.PROT.READ | linux.PROT.WRITE, .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .STACK = true }, -1, 0);
-    if (stack_ptr == std.math.maxInt(@TypeOf(stack_ptr))) {
-        std.debug.print("stack mmap failure", .{});
-        return error.OutOfMemory;
-    }
+    const event_fd = try posix.eventfd(0, 0);
 
-    std.debug.print("mmap result {x}\n", .{stack_ptr});
-
-    const stack_top = stack_ptr + STACK_SIZE;
-    // clone with a new stack, signal SIGCHLD, and new UTS namespace
+    // clone with the same stack, signal SIGCHLD, and new user namespace
     var ptid: i32 = undefined;
     var ctid: i32 = undefined;
-    const event_fd = linux.eventfd(0, 0);
-    const child_pid: isize = @bitCast(linux.clone(evil_twin, stack_top, linux.CLONE.NEWUSER | linux.SIG.CHLD, event_fd, &ptid, 0, &ctid));
-    if (child_pid < 0) {
+    const child_pid: isize = @bitCast(linux.clone5(linux.CLONE.NEWUSER | linux.SIG.CHLD, 0, &ptid, &ctid, 0));
+
+    if (child_pid == 0) {
+        // am child
+        do_namespaced_child(event_fd);
+    } else if (child_pid < 0) {
+        // am erroring out
         std.debug.print("child pid {d}\n", .{child_pid});
         return error.PastenError;
     }
 
+    // am parent
     std.debug.print("child {d}\n", .{child_pid});
 
     // Call newuidmap
