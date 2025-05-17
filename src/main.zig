@@ -9,11 +9,12 @@ fn do_namespaced_child(fd: i32) !void {
 
     // wait for newuidmap
     // no error handling because it's an eventfd
-    _ = linux.read(@intCast(fd), &buf, 8);
+    const write_res = try posix.read(@intCast(fd), &buf);
+    if (write_res != 8) return error.LinuxError;
 
-    std.debug.print("I am a child! {d}\n", .{linux.getuid()});
+    std.debug.print("I am a child! {d}\n", .{posix.getuid()});
     try posix.setuid(0);
-    std.debug.print("I am a child yet again! {d}\n", .{linux.getuid()});
+    std.debug.print("I am a child yet again! {d}\n", .{posix.getuid()});
     const argv = [_:null]?[*:0]const u8{ "/bin/sh", null };
     const envp = [_:null]?[*:0]const u8{null};
     return posix.execvpeZ("/bin/sh", &argv, &envp);
@@ -38,7 +39,7 @@ pub fn main() !void {
     defer newgid_range_list.deinit();
 
     // Our uid maps to itself - for convenience
-    const euid = linux.geteuid();
+    const euid = posix.geteuid();
     try newuid_range_list.append(.{ .inner_id = euid, .outer_id = euid, .count = 1 });
     // Map 0 until min(our uid, allocated count)
     if (uid_range_list.items.len == 1) {
@@ -48,7 +49,7 @@ pub fn main() !void {
     }
 
     // Our gid maps to itself - for convenience
-    const egid = linux.geteuid();
+    const egid = posix.geteuid();
     try newgid_range_list.append(.{ .inner_id = egid, .outer_id = egid, .count = 1 });
 
     // Create file descriptor to notify child when uid mapping is complete
@@ -83,10 +84,9 @@ pub fn main() !void {
     // Resume child
     var buf: [8]u8 = undefined;
     (&buf).* = @bitCast(@as(u64, 1));
-    const write_res = linux.write(@intCast(event_fd), &buf, buf.len);
+    const write_res = try posix.write(event_fd, &buf);
     if (write_res != 8) return error.LinuxError;
     // done!
-    // linux.exit(0);
     linux.exit(try procutil.wait_for_exit(@intCast(child_pid)));
 }
 
