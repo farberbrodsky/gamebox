@@ -3,6 +3,7 @@ const posix = std.posix;
 const linux = std.os.linux;
 const uidmap = @import("uidmap.zig");
 const procutil = @import("procutil.zig");
+const ns = @import("namespace_helpers.zig");
 
 fn do_namespaced_child(fd: i32) !void {
     var buf: [8]u8 = undefined;
@@ -12,9 +13,9 @@ fn do_namespaced_child(fd: i32) !void {
     const write_res = try posix.read(@intCast(fd), &buf);
     if (write_res != 8) return error.LinuxError;
 
-    std.debug.print("I am a child! {d}\n", .{posix.getuid()});
+    std.debug.print("I am a child! {d}\n", .{linux.getuid()});
     try posix.setuid(0);
-    std.debug.print("I am a child yet again! {d}\n", .{posix.getuid()});
+    std.debug.print("I am a child yet again! {d}\n", .{linux.getuid()});
     const argv = [_:null]?[*:0]const u8{ "/bin/sh", null };
     const envp = [_:null]?[*:0]const u8{null};
     return posix.execvpeZ("/bin/sh", &argv, &envp);
@@ -24,33 +25,9 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-
-    // Choose uid and gid ranges for new process
-    const uid_range_list = try uidmap.getMyUidmaps(allocator, .User);
-    defer uid_range_list.deinit();
-    const gid_range_list = try uidmap.getMyUidmaps(allocator, .Group);
-    defer gid_range_list.deinit();
-
-    var newuid_range_list = std.ArrayList(uidmap.NewuidRange).init(allocator);
-    defer newuid_range_list.deinit();
-    var newgid_range_list = std.ArrayList(uidmap.NewuidRange).init(allocator);
-    defer newgid_range_list.deinit();
-
-    // Our uid maps to itself - for convenience
-    const euid = posix.geteuid();
-    try newuid_range_list.append(.{ .inner_id = euid, .outer_id = euid, .count = 1 });
-    // Map 0 until min(our uid, allocated count)
-    if (uid_range_list.items.len == 1) {
-        const outer_id = uid_range_list.items[0].start_id;
-        const count = @min(uid_range_list.items[0].count, euid -% 1);
-        try newuid_range_list.append(.{ .inner_id = 0, .outer_id = outer_id, .count = count });
-    }
-
-    // Our gid maps to itself - for convenience
-    const egid = posix.geteuid();
-    try newgid_range_list.append(.{ .inner_id = egid, .outer_id = egid, .count = 1 });
+    // Choose uid and gid ranges for our new process
+    var uid_ranges = try ns.makeUidRanges(allocator);
+    defer uid_ranges.deinit();
 
     // Create file descriptor to notify child when uid mapping is complete
     const event_fd = try posix.eventfd(0, 0);
@@ -78,8 +55,8 @@ pub fn main() !void {
     std.debug.print("child {d}\n", .{child_pid});
 
     // Call newuidmap
-    try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), newuid_range_list.items, .User);
-    try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), newgid_range_list.items, .Group);
+    try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), uid_ranges.uid.items, .User);
+    try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), uid_ranges.gid.items, .Group);
 
     // Resume child
     var buf: [8]u8 = undefined;
