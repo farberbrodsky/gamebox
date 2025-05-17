@@ -1,27 +1,10 @@
 const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
+const uidmap = @import("uidmap.zig");
+const procutil = @import("procutil.zig");
 
-fn wait_for_exit(child_pid: posix.pid_t) error{SignalError}!u8 {
-    while (true) {
-        // this handles EINTR internally
-        const waitpid_out = posix.waitpid(@intCast(child_pid), 0);
-
-        if (waitpid_out.pid != child_pid) {
-            std.debug.print("waitpid error\n", .{});
-            posix.exit(1);
-        }
-
-        if (posix.W.IFEXITED(waitpid_out.status)) {
-            return posix.W.EXITSTATUS(waitpid_out.status);
-        } else if (posix.W.IFSIGNALED(waitpid_out.status)) {
-            return error.SignalError;
-        }
-        // otherwise: keep going
-    }
-}
-
-fn do_namespaced_child(fd: i32) noreturn {
+fn do_namespaced_child(fd: i32) !void {
     var buf: [8]u8 = undefined;
 
     // wait for newuidmap
@@ -29,17 +12,46 @@ fn do_namespaced_child(fd: i32) noreturn {
     _ = linux.read(@intCast(fd), &buf, 8);
 
     std.debug.print("I am a child! {d}\n", .{linux.getuid()});
-    _ = linux.setuid(0);
+    try posix.setuid(0);
     std.debug.print("I am a child yet again! {d}\n", .{linux.getuid()});
-    const aaaa_fd = linux.open("/tmp/aaaa", .{ .ACCMODE = .WRONLY, .CREAT = true }, 0o777);
-    posix.close(@intCast(aaaa_fd));
-    posix.exit(0);
+    const argv = [_:null]?[*:0]const u8{ "/bin/sh", null };
+    const envp = [_:null]?[*:0]const u8{null};
+    return posix.execvpeZ("/bin/sh", &argv, &envp);
 }
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
 
+    // Choose uid and gid ranges for new process
+    const uid_range_list = try uidmap.getMyUidmaps(allocator, .User);
+    defer uid_range_list.deinit();
+    const gid_range_list = try uidmap.getMyUidmaps(allocator, .Group);
+    defer gid_range_list.deinit();
+
+    var newuid_range_list = std.ArrayList(uidmap.NewuidRange).init(allocator);
+    defer newuid_range_list.deinit();
+    var newgid_range_list = std.ArrayList(uidmap.NewuidRange).init(allocator);
+    defer newgid_range_list.deinit();
+
+    // Our uid maps to itself - for convenience
+    const euid = linux.geteuid();
+    try newuid_range_list.append(.{ .inner_id = euid, .outer_id = euid, .count = 1 });
+    // Map 0 until min(our uid, allocated count)
+    if (uid_range_list.items.len == 1) {
+        const outer_id = uid_range_list.items[0].start_id;
+        const count = @min(uid_range_list.items[0].count, euid -% 1);
+        try newuid_range_list.append(.{ .inner_id = 0, .outer_id = outer_id, .count = count });
+    }
+
+    // Our gid maps to itself - for convenience
+    const egid = linux.geteuid();
+    try newgid_range_list.append(.{ .inner_id = egid, .outer_id = egid, .count = 1 });
+
+    // Create file descriptor to notify child when uid mapping is complete
     const event_fd = try posix.eventfd(0, 0);
 
     // clone with the same stack, signal SIGCHLD, and new user namespace
@@ -49,7 +61,12 @@ pub fn main() !void {
 
     if (child_pid == 0) {
         // am child
-        do_namespaced_child(event_fd);
+        do_namespaced_child(event_fd) catch |err| {
+            std.debug.print("{}", .{err});
+        };
+        // shouldn't have returned!!
+        linux.exit(1);
+        unreachable;
     } else if (child_pid < 0) {
         // am erroring out
         std.debug.print("child pid {d}\n", .{child_pid});
@@ -60,36 +77,17 @@ pub fn main() !void {
     std.debug.print("child {d}\n", .{child_pid});
 
     // Call newuidmap
-    const fork_pid: isize = @bitCast(linux.fork());
-    if (fork_pid == 0) {
-        const my_loweruid = 100000;
-        const my_count = 128;
+    try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), newuid_range_list.items, .User);
+    try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), newgid_range_list.items, .Group);
 
-        var buffer: [128]u8 = undefined;
-        var args_allocator = std.heap.FixedBufferAllocator.init(&buffer);
-
-        const pid_str = std.fmt.allocPrintZ(args_allocator.allocator(), "{d}", .{child_pid}) catch linux.exit(1);
-        const loweruid_str = std.fmt.allocPrintZ(args_allocator.allocator(), "{d}", .{my_loweruid}) catch linux.exit(1);
-        const count_str = std.fmt.allocPrintZ(args_allocator.allocator(), "{d}", .{my_count}) catch linux.exit(1);
-
-        const arr: [6:null]?[*:0]const u8 = .{ "newuidmap", pid_str, "0", loweruid_str, count_str, null };
-        const env: [1:null]?[*:0]const u8 = .{null};
-
-        posix.execvpeZ("newuidmap", &arr, &env) catch linux.exit(1);
-        linux.exit(1);
-    } else if (fork_pid < 0) {
-        return error.ForkError;
-    }
-
-    // Wait for it to finish
-    const exit_status = try wait_for_exit(@intCast(fork_pid));
-    if (exit_status != 0) return error.PastenError;
     // Resume child
     var buf: [8]u8 = undefined;
     (&buf).* = @bitCast(@as(u64, 1));
     const write_res = linux.write(@intCast(event_fd), &buf, buf.len);
-    if (write_res != 8) return error.PastenError;
+    if (write_res != 8) return error.LinuxError;
     // done!
+    // linux.exit(0);
+    linux.exit(try procutil.wait_for_exit(@intCast(child_pid)));
 }
 
 test "simple test" {
@@ -97,4 +95,8 @@ test "simple test" {
     defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
     try list.append(42);
     try std.testing.expectEqual(@as(i32, 42), list.pop());
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }
