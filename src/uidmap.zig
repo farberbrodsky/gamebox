@@ -18,7 +18,7 @@ pub const NewuidRange = struct {
 pub const UserOrGroup = enum { User, Group };
 
 /// Internal parsing method for parsing subuid ranges in the format {name/uid}:start_id:count.
-fn parseUidmaps(allocator: std.mem.Allocator, reader: anytype, my_uid: u32, my_name: []const u8) !std.ArrayList(SubuidRange) {
+fn parseIdmapsFile(allocator: std.mem.Allocator, reader: anytype, my_uid: u32, my_name: []const u8) !std.ArrayList(SubuidRange) {
     // Result object
     var result = std.ArrayList(SubuidRange).init(allocator);
     errdefer result.deinit();
@@ -57,17 +57,11 @@ fn parseUidmaps(allocator: std.mem.Allocator, reader: anytype, my_uid: u32, my_n
 }
 
 /// Parses either /etc/subuid or /etc/subgid, looking for entries relevant to the running user's UID and name.
-pub fn getMyUidmaps(allocator: std.mem.Allocator, user_or_group: UserOrGroup) !std.ArrayList(SubuidRange) {
+fn getIdmapsFromFile(allocator: std.mem.Allocator, path: [*:0]const u8) !std.ArrayList(SubuidRange) {
     // Get my euid, and name from /etc/passwd
     const my_uid = linux.geteuid();
     const my_pw = std.c.getpwuid(my_uid) orelse return error.UserError;
     const my_name: [*:0]const u8 = my_pw.pw_name orelse return error.UserError;
-
-    // Open a reader for /etc/subuid or /etc/subgid
-    const path = switch (user_or_group) {
-        .User => "/etc/subuid",
-        .Group => "/etc/subgid",
-    };
 
     const file = try std.fs.cwd().openFileZ(path, .{});
     defer file.close();
@@ -75,7 +69,15 @@ pub fn getMyUidmaps(allocator: std.mem.Allocator, user_or_group: UserOrGroup) !s
     var r = buf.reader();
 
     // Parse based on the reader, uid and name.
-    return parseUidmaps(allocator, &r, my_uid, std.mem.span(my_name));
+    return parseIdmapsFile(allocator, &r, my_uid, std.mem.span(my_name));
+}
+
+pub fn getUidmaps(allocator: std.mem.Allocator) !std.ArrayList(SubuidRange) {
+    return getIdmapsFromFile(allocator, "/etc/subuid");
+}
+
+pub fn getGidmaps(allocator: std.mem.Allocator) !std.ArrayList(SubuidRange) {
+    return getIdmapsFromFile(allocator, "/etc/subgid");
 }
 
 const PreparedCommand = struct {
@@ -135,7 +137,7 @@ test "parse uidmap test" {
     const buffer = "user:100000:65536\nuserust:123:456\nabc:900:1\n1000:1007:1\nuser:3141:592";
     var stream = std.io.fixedBufferStream(buffer);
     var reader = stream.reader();
-    const out_list = try parseUidmaps(std.testing.allocator, &reader, 1000, "user");
+    const out_list = try parseIdmapsFile(std.testing.allocator, &reader, 1000, "user");
     try expect(out_list.items.len == 3);
     try std.testing.expectEqual(out_list.items[0], SubuidRange{ .start_id = 100000, .count = 65536 });
     try std.testing.expectEqual(out_list.items[1], SubuidRange{ .start_id = 1007, .count = 1 });
