@@ -64,7 +64,7 @@ pub fn main() !void {
     const write_res = try posix.write(event_fd, &buf);
     if (write_res != 8) return error.LinuxError;
     // done!
-    linux.exit(try procutil.wait_for_exit(@intCast(child_pid)));
+    linux.exit(try procutil.waitForExit(@intCast(child_pid)));
 }
 
 test "simple test" {

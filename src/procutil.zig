@@ -4,7 +4,7 @@ const linux = std.os.linux;
 
 const WaitError = error{SignalError};
 
-pub fn wait_for_exit(child_pid: posix.pid_t) WaitError!u8 {
+pub fn waitForExit(child_pid: posix.pid_t) WaitError!u8 {
     while (true) {
         // this handles EINTR internally
         const waitpid_out = posix.waitpid(@intCast(child_pid), 0);

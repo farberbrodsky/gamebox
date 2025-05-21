@@ -18,7 +18,7 @@ pub const NewuidRange = struct {
 pub const UserOrGroup = enum { User, Group };
 
 /// Internal parsing method for parsing subuid ranges in the format {name/uid}:start_id:count.
-fn parseUidmaps(allocator: std.mem.Allocator, reader: anytype, my_uid: u32, my_name: [*:0]const u8) !std.ArrayList(SubuidRange) {
+fn parseUidmaps(allocator: std.mem.Allocator, reader: anytype, my_uid: u32, my_name: []const u8) !std.ArrayList(SubuidRange) {
     // Result object
     var result = std.ArrayList(SubuidRange).init(allocator);
     errdefer result.deinit();
@@ -27,46 +27,29 @@ fn parseUidmaps(allocator: std.mem.Allocator, reader: anytype, my_uid: u32, my_n
     var uid_buffer: [32]u8 = undefined;
     const uid_str = std.fmt.bufPrintZ(&uid_buffer, "{d}", .{my_uid}) catch unreachable;
 
+    const column_buffer = try allocator.alloc(u8, @max(uid_buffer.len, my_name.len) + 1);
+    defer allocator.free(column_buffer);
+
     line_loop: while (true) {
-        // read first byte
-        var b = reader.readByte() catch |err| switch (err) {
+        const user_name_or_id = reader.readUntilDelimiter(column_buffer, ':') catch |err| switch (err) {
+            error.StreamTooLong => "", // if too long, use an empty value
             error.EndOfStream => break :line_loop,
             else => return err,
         };
 
-        // check whether it's a number or name
-        var expect_str: [*:0]const u8 = undefined;
-        if (std.ascii.isDigit(b)) {
-            expect_str = uid_str;
-        } else {
-            expect_str = my_name;
-        }
-
-        // compare start of line until not matching
-        var expect_i: usize = 0;
-        while (expect_str[expect_i] != 0) : (expect_i += 1) {
-            if (b != expect_str[expect_i]) {
-                // not a match
-                break;
-            }
-
-            b = try reader.readByte();
-        }
-
-        if (expect_str[expect_i] == 0 and b == ':') {
-            // This is a matching entry!
-            // parse the rest of it
-            var parse_int_buffer: [32]u8 = undefined;
-            const subuser_id_buffer = try reader.readUntilDelimiter(&parse_int_buffer, ':');
-            const subuser_id = try std.fmt.parseInt(posix.uid_t, subuser_id_buffer, 10);
-            const subuser_count_buffer = try reader.readUntilDelimiterOrEof(&parse_int_buffer, '\n') orelse "";
-            const subuser_count = try std.fmt.parseInt(posix.uid_t, subuser_count_buffer, 10);
-
-            try result.append(.{ .start_id = subuser_id, .count = subuser_count });
-        } else {
-            // skip to next line
+        if (!std.mem.eql(u8, user_name_or_id, my_name) and !std.mem.eql(u8, user_name_or_id, uid_str)) {
+            // line is irrelevant
             try reader.skipUntilDelimiterOrEof('\n');
+            continue :line_loop;
         }
+
+        // parse the rest of it
+        const subuser_id_buffer = try reader.readUntilDelimiter(column_buffer, ':');
+        const subuser_id = try std.fmt.parseInt(posix.uid_t, subuser_id_buffer, 10);
+        const subuser_count_buffer = try reader.readUntilDelimiterOrEof(column_buffer, '\n') orelse "";
+        const subuser_count = try std.fmt.parseInt(posix.uid_t, subuser_count_buffer, 10);
+
+        try result.append(.{ .start_id = subuser_id, .count = subuser_count });
     }
 
     // return successful result
@@ -92,7 +75,7 @@ pub fn getMyUidmaps(allocator: std.mem.Allocator, user_or_group: UserOrGroup) !s
     var r = buf.reader();
 
     // Parse based on the reader, uid and name.
-    return parseUidmaps(allocator, &r, my_uid, my_name);
+    return parseUidmaps(allocator, &r, my_uid, std.mem.span(my_name));
 }
 
 const PreparedCommand = struct {
@@ -142,7 +125,7 @@ pub fn forkingApplyUidmaps(parent_allocator: std.mem.Allocator, pid: posix.pid_t
         unreachable;
     }
     prepare.arena.deinit();
-    const exit_code = try procutil.wait_for_exit(fork_pid);
+    const exit_code = try procutil.waitForExit(fork_pid);
     if (exit_code != 0) {
         return error.UidmapError;
     }
