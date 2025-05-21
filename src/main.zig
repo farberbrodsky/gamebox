@@ -48,7 +48,7 @@ pub fn main() !void {
     } else if (child_pid < 0) {
         // am erroring out
         std.debug.print("child pid {d}\n", .{child_pid});
-        return error.PastenError;
+        return error.ForkError;
     }
 
     // am parent
