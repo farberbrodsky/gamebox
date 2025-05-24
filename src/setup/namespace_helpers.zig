@@ -1,7 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
-const binux = @import("binux.zig");
+const binux = @import("../binux.zig");
 const uidmap = @import("uidmap.zig");
 const configuration = @import("configuration.zig");
 

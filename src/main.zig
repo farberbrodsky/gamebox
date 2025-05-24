@@ -1,32 +1,45 @@
 const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
-const uidmap = @import("uidmap.zig");
+const uidmap = @import("setup/uidmap.zig");
 const procutil = @import("procutil.zig");
-const ns = @import("namespace_helpers.zig");
-const xdg_base_directory = @import("xdg_base_directory.zig");
-const configuration = @import("configuration.zig");
+const ns = @import("setup/namespace_helpers.zig");
+const xdg_base_directory = @import("setup/xdg_base_directory.zig");
+const configuration = @import("setup/configuration.zig");
 
-fn do_namespaced_child(allocator: std.mem.Allocator, fd: i32) !void {
-    var buf: [8]u8 = undefined;
-
+fn do_namespaced_child(allocator: std.mem.Allocator, uidmap_ready: *procutil.FlagEventfd) !void {
     // wait for newuidmap
-    // no error handling because it's an eventfd
-    const write_res = try posix.read(@intCast(fd), &buf);
-    if (write_res != 8) return error.LinuxError;
+    uidmap_ready.wait();
 
-    // create mounts
-    try ns.setupMounts(allocator);
-
-    std.debug.print("I am a child! {d}\n", .{linux.getuid()});
+    // become root among the foxes
     try posix.seteuid(0);
     try posix.setuid(0);
     try posix.setegid(0);
     try posix.setgid(0);
-    std.debug.print("I am a child yet again! {d}\n", .{linux.getuid()});
-    const argv = [_:null]?[*:0]const u8{ "/bin/sh", null };
-    const envp = [_:null]?[*:0]const u8{ "PATH=/bin", null };
-    return posix.execveZ("/bin/sh", &argv, &envp);
+
+    // create mounts
+    try ns.setupMounts(allocator);
+
+    // register sigchld handler
+    // We would like to know when all of the children have died.
+    var echild_event = try procutil.FlagEventfd.init();
+    defer echild_event.deinit();
+    try procutil.registerChildSignal(&echild_event);
+
+    const fork_pid = try posix.fork();
+    if (fork_pid == 0) {
+        // Execute /bin/sh
+        const argv = [_:null]?[*:0]const u8{ "/bin/sh", null };
+        const envp = [_:null]?[*:0]const u8{ "PATH=/bin", null };
+        posix.execveZ("/bin/sh", &argv, &envp) catch linux.exit(1);
+        // should not have returned!
+        linux.exit(1);
+    }
+
+    // wait for all children to exit
+    echild_event.wait();
+    std.debug.print("The children all died successfuly\n", .{});
+    linux.exit(0);
 }
 
 pub fn main() !void {
@@ -34,13 +47,12 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Load configuration
-    try xdg_base_directory.init(allocator);
-    defer xdg_base_directory.deinit(allocator);
     try configuration.init(allocator);
-    defer configuration.deinit();
+    defer configuration.deinit(allocator);
 
     // Create file descriptor to notify child when uid mapping is complete
-    const event_fd = try posix.eventfd(0, 0);
+    var uidmap_ready = try procutil.FlagEventfd.init();
+    defer uidmap_ready.deinit();
 
     // clone with the same stack, signal SIGCHLD, and new user namespace
     var ptid: i32 = undefined;
@@ -49,12 +61,11 @@ pub fn main() !void {
 
     if (child_pid == 0) {
         // am child
-        do_namespaced_child(allocator, event_fd) catch |err| {
+        do_namespaced_child(allocator, &uidmap_ready) catch |err| {
             std.debug.print("{}", .{err});
         };
         // shouldn't have returned!!
         linux.exit(1);
-        unreachable;
     } else if (child_pid < 0) {
         // am erroring out
         std.debug.print("child pid {d}\n", .{child_pid});
@@ -69,10 +80,7 @@ pub fn main() !void {
     try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), configuration.getGidMappings(), .Group);
 
     // Resume child
-    var buf: [8]u8 = undefined;
-    (&buf).* = @bitCast(@as(u64, 1));
-    const write_res = try posix.write(event_fd, &buf);
-    if (write_res != 8) return error.LinuxError;
+    uidmap_ready.notify();
     // done!
     linux.exit(try procutil.waitForExit(@intCast(child_pid)));
 }

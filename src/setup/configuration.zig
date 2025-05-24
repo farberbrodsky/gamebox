@@ -20,6 +20,7 @@ const Config = struct {
 var parsed_configuration: std.json.Parsed(Config) = undefined;
 
 pub fn init(allocator: std.mem.Allocator) !void {
+    try xdg_base_directory.init(allocator);
     const config_path = try std.fs.path.join(allocator, &[_][]const u8{ xdg_base_directory.get(.xdg_config_home), "gamebox/config.json" });
     const config_dir = std.fs.path.dirname(config_path) orelse return error.PathError;
 
@@ -40,8 +41,9 @@ pub fn init(allocator: std.mem.Allocator) !void {
     }
 }
 
-pub fn deinit() void {
+pub fn deinit(allocator: std.mem.Allocator) void {
     parsed_configuration.deinit();
+    xdg_base_directory.deinit(allocator);
 }
 
 pub fn getBaseImagePath() [:0]const u8 {

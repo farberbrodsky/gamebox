@@ -2,7 +2,7 @@ const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
 const expect = std.testing.expect;
-const procutil = @import("procutil.zig");
+const procutil = @import("../procutil.zig");
 const NewuidRange = @import("configuration.zig").NewuidRange;
 
 pub const SubuidRange = struct {
@@ -119,7 +119,6 @@ pub fn forkingApplyUidmaps(parent_allocator: std.mem.Allocator, pid: posix.pid_t
         // am child. execve, quick, in and out...
         _ = posix.execvpeZ(prepare.exec, prepare.argv, prepare.envp) catch null;
         linux.exit(1);
-        unreachable;
     }
     prepare.arena.deinit();
     const exit_code = try procutil.waitForExit(fork_pid);
