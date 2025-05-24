@@ -5,6 +5,7 @@ const uidmap = @import("uidmap.zig");
 const procutil = @import("procutil.zig");
 const ns = @import("namespace_helpers.zig");
 const xdg_base_directory = @import("xdg_base_directory.zig");
+const configuration = @import("configuration.zig");
 
 fn do_namespaced_child(fd: i32) !void {
     var buf: [8]u8 = undefined;
@@ -35,6 +36,7 @@ pub fn main() !void {
     // Load configuration
     try xdg_base_directory.init(allocator);
     defer xdg_base_directory.deinit(allocator);
+    try configuration.create_or_load_configuration(allocator);
     std.debug.print("Base directory is {s}\n", .{xdg_base_directory.get(.xdg_config_home)});
 
     // Choose uid and gid ranges for our new process

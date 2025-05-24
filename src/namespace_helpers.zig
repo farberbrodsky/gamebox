@@ -3,6 +3,7 @@ const posix = std.posix;
 const linux = std.os.linux;
 const binux = @import("binux.zig");
 const uidmap = @import("uidmap.zig");
+const configuration = @import("configuration.zig");
 
 const UidRanges = struct {
     allocator: std.mem.Allocator,
@@ -63,10 +64,10 @@ pub fn setupMounts() !void {
     try binux.mount("", "/", null, linux.MS.PRIVATE | linux.MS.REC, 0);
 
     // Create a new mount which will be /
-    try binux.mount("/home/misha/code/gamebox/alpine", "/tmp", null, linux.MS.BIND, 0);
+    try binux.mount(configuration.getBaseImagePath(), "/tmp", null, linux.MS.BIND, 0);
     try binux.chroot("/tmp");
     try posix.chdir("/");
 
     // add procfs and friends
-    try binux.mount("pork", "/proc", "proc", 0, 0);
+    try binux.mount("porkfs", "/proc", "proc", 0, 0);
 }
