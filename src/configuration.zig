@@ -5,11 +5,13 @@ const xdg_base_directory = @import("xdg_base_directory.zig");
 
 const Config = struct {
     base_image: [:0]const u8,
+    overlay_upper: [:0]const u8,
+    overlay_work: [:0]const u8,
 };
 
 var parsed_configuration: std.json.Parsed(Config) = undefined;
 
-pub fn create_or_load_configuration(allocator: std.mem.Allocator) !void {
+pub fn init(allocator: std.mem.Allocator) !void {
     const config_path = try std.fs.path.join(allocator, &[_][]const u8{ xdg_base_directory.get(.xdg_config_home), "gamebox/config.json" });
     const config_dir = std.fs.path.dirname(config_path) orelse return error.PathError;
 
@@ -30,6 +32,18 @@ pub fn create_or_load_configuration(allocator: std.mem.Allocator) !void {
     }
 }
 
+pub fn deinit() void {
+    parsed_configuration.deinit();
+}
+
 pub fn getBaseImagePath() [:0]const u8 {
     return parsed_configuration.value.base_image;
+}
+
+pub fn getOverlayUpper() [:0]const u8 {
+    return parsed_configuration.value.overlay_upper;
+}
+
+pub fn getOverlayWork() [:0]const u8 {
+    return parsed_configuration.value.overlay_work;
 }

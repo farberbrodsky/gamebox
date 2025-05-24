@@ -7,7 +7,7 @@ const ns = @import("namespace_helpers.zig");
 const xdg_base_directory = @import("xdg_base_directory.zig");
 const configuration = @import("configuration.zig");
 
-fn do_namespaced_child(fd: i32) !void {
+fn do_namespaced_child(allocator: std.mem.Allocator, fd: i32) !void {
     var buf: [8]u8 = undefined;
 
     // wait for newuidmap
@@ -16,7 +16,7 @@ fn do_namespaced_child(fd: i32) !void {
     if (write_res != 8) return error.LinuxError;
 
     // create mounts
-    try ns.setupMounts();
+    try ns.setupMounts(allocator);
 
     std.debug.print("I am a child! {d}\n", .{linux.getuid()});
     try posix.seteuid(0);
@@ -36,8 +36,8 @@ pub fn main() !void {
     // Load configuration
     try xdg_base_directory.init(allocator);
     defer xdg_base_directory.deinit(allocator);
-    try configuration.create_or_load_configuration(allocator);
-    std.debug.print("Base directory is {s}\n", .{xdg_base_directory.get(.xdg_config_home)});
+    try configuration.init(allocator);
+    defer configuration.deinit();
 
     // Choose uid and gid ranges for our new process
     var uid_ranges = try ns.makeUidRanges(allocator);
@@ -53,7 +53,7 @@ pub fn main() !void {
 
     if (child_pid == 0) {
         // am child
-        do_namespaced_child(event_fd) catch |err| {
+        do_namespaced_child(allocator, event_fd) catch |err| {
             std.debug.print("{}", .{err});
         };
         // shouldn't have returned!!

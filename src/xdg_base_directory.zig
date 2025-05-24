@@ -14,6 +14,7 @@ var g = struct {
     pw_dir: ?[]const u8 = null,
     home_dir: ?[]const u8 = null,
     xdg_config_home: ?[]const u8 = null,
+    xdg_data_home: ?[]const u8 = null,
 }{};
 
 fn getMyUid() void {
@@ -55,7 +56,17 @@ fn getXdgConfigHome(allocator: std.mem.Allocator) !void {
     if (env_xdg_config_home != null) {
         g.xdg_config_home = try allocator.dupe(u8, env_xdg_config_home.?);
     } else {
-        g.xdg_config_home = try std.fs.path.join(allocator, &[_][]const u8{g.home_dir.?, ".config"});
+        g.xdg_config_home = try std.fs.path.join(allocator, &[_][]const u8{ g.home_dir.?, ".config" });
+    }
+}
+
+/// Must be called after getHome()
+fn getXdgDataHome(allocator: std.mem.Allocator) !void {
+    const env_xdg_data_home = posix.getenv("XDG_DATA_HOME");
+    if (env_xdg_data_home != null) {
+        g.xdg_data_home = try allocator.dupe(u8, env_xdg_data_home.?);
+    } else {
+        g.xdg_data_home = try std.fs.path.join(allocator, &[_][]const u8{ g.home_dir.?, ".local/share" });
     }
 }
 
@@ -65,6 +76,7 @@ pub fn init(allocator: std.mem.Allocator) !void {
     try getMyPasswdEntry(allocator);
     try getHome(allocator);
     try getXdgConfigHome(allocator);
+    try getXdgDataHome(allocator);
 }
 
 /// Frees all non-null slices under g
@@ -84,14 +96,12 @@ fn StructFieldsType(comptime source_type: type) type {
     inline for (0.., fields) |i, field| {
         enum_fields[i] = .{ .name = field.name, .value = i };
     }
-    return @Type(.{
-        .Enum = .{
-            .tag_type = i32,
-            .fields = &enum_fields,
-            .decls = &[_]std.builtin.Type.Declaration {},
-            .is_exhaustive = true,
-        }
-    });
+    return @Type(.{ .Enum = .{
+        .tag_type = i32,
+        .fields = &enum_fields,
+        .decls = &[_]std.builtin.Type.Declaration{},
+        .is_exhaustive = true,
+    } });
 }
 
 /// Lifetime is the same as this system's.
