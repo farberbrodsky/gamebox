@@ -4,6 +4,7 @@ const linux = std.os.linux;
 const uidmap = @import("uidmap.zig");
 const procutil = @import("procutil.zig");
 const ns = @import("namespace_helpers.zig");
+const xdg_base_directory = @import("xdg_base_directory.zig");
 
 fn do_namespaced_child(fd: i32) !void {
     var buf: [8]u8 = undefined;
@@ -13,17 +14,28 @@ fn do_namespaced_child(fd: i32) !void {
     const write_res = try posix.read(@intCast(fd), &buf);
     if (write_res != 8) return error.LinuxError;
 
+    // create mounts
+    try ns.setupMounts();
+
     std.debug.print("I am a child! {d}\n", .{linux.getuid()});
+    try posix.seteuid(0);
     try posix.setuid(0);
+    try posix.setegid(0);
+    try posix.setgid(0);
     std.debug.print("I am a child yet again! {d}\n", .{linux.getuid()});
     const argv = [_:null]?[*:0]const u8{ "/bin/sh", null };
-    const envp = [_:null]?[*:0]const u8{null};
-    return posix.execvpeZ("/bin/sh", &argv, &envp);
+    const envp = [_:null]?[*:0]const u8{ "PATH=/bin", null };
+    return posix.execveZ("/bin/sh", &argv, &envp);
 }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
+
+    // Load configuration
+    try xdg_base_directory.init(allocator);
+    defer xdg_base_directory.deinit(allocator);
+    std.debug.print("Base directory is {s}\n", .{xdg_base_directory.get(.xdg_config_home)});
 
     // Choose uid and gid ranges for our new process
     var uid_ranges = try ns.makeUidRanges(allocator);
@@ -35,7 +47,7 @@ pub fn main() !void {
     // clone with the same stack, signal SIGCHLD, and new user namespace
     var ptid: i32 = undefined;
     var ctid: i32 = undefined;
-    const child_pid: isize = @bitCast(linux.clone5(linux.CLONE.NEWUSER | linux.SIG.CHLD, 0, &ptid, &ctid, 0));
+    const child_pid: isize = @bitCast(linux.clone5(linux.CLONE.NEWUSER | linux.CLONE.NEWNS | linux.CLONE.NEWPID | linux.SIG.CHLD, 0, &ptid, &ctid, 0));
 
     if (child_pid == 0) {
         // am child

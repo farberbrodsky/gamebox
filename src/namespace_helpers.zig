@@ -1,5 +1,7 @@
 const std = @import("std");
+const posix = std.posix;
 const linux = std.os.linux;
+const binux = @import("binux.zig");
 const uidmap = @import("uidmap.zig");
 
 const UidRanges = struct {
@@ -54,4 +56,17 @@ pub fn makeUidRanges(allocator: std.mem.Allocator) !UidRanges {
     }
 
     return .{ .allocator = allocator, .uid = newuid_range_list, .gid = newgid_range_list };
+}
+
+pub fn setupMounts() !void {
+    // Unshare mount updates from the parent
+    try binux.mount("", "/", null, linux.MS.PRIVATE | linux.MS.REC, 0);
+
+    // Create a new mount which will be /
+    try binux.mount("/home/misha/code/gamebox/alpine", "/tmp", null, linux.MS.BIND, 0);
+    try binux.chroot("/tmp");
+    try posix.chdir("/");
+
+    // add procfs and friends
+    try binux.mount("pork", "/proc", "proc", 0, 0);
 }
