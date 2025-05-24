@@ -3,15 +3,10 @@ const posix = std.posix;
 const linux = std.os.linux;
 const expect = std.testing.expect;
 const procutil = @import("procutil.zig");
+const NewuidRange = @import("configuration.zig").NewuidRange;
 
 pub const SubuidRange = struct {
     start_id: posix.uid_t,
-    count: posix.uid_t,
-};
-
-pub const NewuidRange = struct {
-    inner_id: posix.uid_t,
-    outer_id: posix.uid_t,
     count: posix.uid_t,
 };
 

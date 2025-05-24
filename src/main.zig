@@ -39,10 +39,6 @@ pub fn main() !void {
     try configuration.init(allocator);
     defer configuration.deinit();
 
-    // Choose uid and gid ranges for our new process
-    var uid_ranges = try ns.makeUidRanges(allocator);
-    defer uid_ranges.deinit();
-
     // Create file descriptor to notify child when uid mapping is complete
     const event_fd = try posix.eventfd(0, 0);
 
@@ -69,8 +65,8 @@ pub fn main() !void {
     std.debug.print("child {d}\n", .{child_pid});
 
     // Call newuidmap
-    try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), uid_ranges.uid.items, .User);
-    try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), uid_ranges.gid.items, .Group);
+    try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), configuration.getUidMappings(), .User);
+    try uidmap.forkingApplyUidmaps(allocator, @intCast(child_pid), configuration.getGidMappings(), .Group);
 
     // Resume child
     var buf: [8]u8 = undefined;

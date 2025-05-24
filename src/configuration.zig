@@ -3,10 +3,18 @@ const posix = std.posix;
 const linux = std.os.linux;
 const xdg_base_directory = @import("xdg_base_directory.zig");
 
+pub const NewuidRange = struct {
+    inner_id: posix.uid_t,
+    outer_id: posix.uid_t,
+    count: posix.uid_t,
+};
+
 const Config = struct {
     base_image: [:0]const u8,
     overlay_upper: [:0]const u8,
     overlay_work: [:0]const u8,
+    uid_mappings: []NewuidRange,
+    gid_mappings: []NewuidRange,
 };
 
 var parsed_configuration: std.json.Parsed(Config) = undefined;
@@ -46,4 +54,12 @@ pub fn getOverlayUpper() [:0]const u8 {
 
 pub fn getOverlayWork() [:0]const u8 {
     return parsed_configuration.value.overlay_work;
+}
+
+pub fn getUidMappings() []const NewuidRange {
+    return parsed_configuration.value.uid_mappings;
+}
+
+pub fn getGidMappings() []const NewuidRange {
+    return parsed_configuration.value.gid_mappings;
 }
