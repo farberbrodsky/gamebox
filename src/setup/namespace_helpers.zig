@@ -59,29 +59,60 @@ pub fn makeUidRanges(allocator: std.mem.Allocator) !UidRanges {
     return .{ .allocator = allocator, .uid = newuid_range_list, .gid = newgid_range_list };
 }
 
+const OLD_ROOT_POINT = ".oldroot";
+
 pub fn setupMounts(allocator: std.mem.Allocator) !void {
-    // We need mount points to already exist.
-    const OVERLAY_LOWER = "/tmp";
-    const OVERLAY_MOUNT_AT = "/usr";
+    const image_path = configuration.getBaseImagePath();
+    const overlay_upper = configuration.getOverlayUpper();
+    const overlay_work = configuration.getOverlayWork();
 
     // Unshare mount updates from the parent
     try binux.mount("", "/", null, linux.MS.PRIVATE | linux.MS.REC, 0);
 
-    // Create a new mount which will be /
-    try binux.mount(configuration.getBaseImagePath(), OVERLAY_LOWER, null, linux.MS.BIND, 0);
-    // Convert it to read only
-    try binux.mount(OVERLAY_LOWER, OVERLAY_LOWER, null, linux.MS.BIND | linux.MS.REMOUNT | linux.MS.RDONLY, 0);
-
-    // Create an overlayfs: lowerdir, upperdir, workdir
-    const overlay_params = .{ OVERLAY_LOWER, configuration.getOverlayUpper(), configuration.getOverlayWork() };
+    // Mount an overlayfs instead of the image.
+    // Even if we didn't do this, the new root path has to be a different mount point for pivot_root to work!
+    const overlay_params = .{ image_path, overlay_upper, overlay_work };
     const overlay_params_str = try std.fmt.allocPrintZ(allocator, "lowerdir={s},upperdir={s},workdir={s}", overlay_params);
     defer allocator.free(overlay_params_str);
+    binux.mount("overlay", image_path, "overlay", 0, @intFromPtr(@as([*:0]const u8, overlay_params_str))) catch |err| switch (err) {
+        error.FileNotFound => {
+            return error.OverlayFileNotFound;
+        },
+        else => return error.OverlayError,
+    };
 
-    try binux.mount("overlay", OVERLAY_MOUNT_AT, "overlay", 0, @intFromPtr(@as([*:0]const u8, overlay_params_str)));
-    // This is the new root! All hail the new root.
-    try binux.chroot(OVERLAY_MOUNT_AT);
-    try posix.chdir("/");
+    // Enter image_path as the root, and keep the old root under /.oldroot
+    try posix.chdirZ(image_path);
+    binux.pivot_root(".", OLD_ROOT_POINT) catch |err| switch (err) {
+        error.FileNotFound => {
+            // try to recover by making the directory
+            try posix.mkdirZ(OLD_ROOT_POINT, 0o777);
+            try binux.pivot_root(".", OLD_ROOT_POINT);
+        },
+        else => return err,
+    };
 
     // add procfs and friends
     try binux.mount("porkfs", "/proc", "proc", 0, 0);
+    try setupDevFile("null");
+    try setupDevFile("zero");
+
+    // detach oldroot
+    try binux.umount2(OLD_ROOT_POINT, linux.MNT.DETACH);
+}
+
+/// Helper for setupMounts
+fn setupDevFile(comptime device_name: [:0]const u8) !void {
+    const dst_path = "/dev/" ++ device_name;
+    const src_path = "/" ++ OLD_ROOT_POINT ++ dst_path;
+
+    binux.mount(src_path, dst_path, null, linux.MS.BIND, 0) catch |err| switch (err) {
+        error.FileNotFound => {
+            // try to recover by making the file
+            const fd = try posix.openZ(dst_path, .{ .CREAT = true }, 0);
+            posix.close(fd);
+            try binux.mount(src_path, dst_path, null, linux.MS.BIND, 0);
+        },
+        else => return err,
+    };
 }
