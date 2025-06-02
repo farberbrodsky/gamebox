@@ -43,8 +43,7 @@ fn do_namespaced_child(allocator: std.mem.Allocator, uidmap_ready: *procutil.Fla
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+    const allocator = std.heap.c_allocator;
 
     // Load configuration
     try configuration.init(allocator);
@@ -65,7 +64,7 @@ pub fn main() !void {
             std.debug.print("{}", .{err});
         };
         // shouldn't have returned!!
-        linux.exit(1);
+        linux.exit_group(1);
     } else if (child_pid < 0) {
         // am erroring out
         std.debug.print("child pid {d}\n", .{child_pid});

@@ -27,16 +27,16 @@ fn getMyUid() void {
 /// Must be called after getMyUid()
 fn getMyPasswdEntry(allocator: std.mem.Allocator) !void {
     const passwd = std.c.getpwuid(ruid);
-    if (passwd == null or passwd.?.pw_name == null or passwd.?.pw_dir == null) {
+    if (passwd == null or passwd.?.name == null or passwd.?.dir == null) {
         return error.PasswdError;
     }
 
     // create copy of passwd.pw_name
-    const unowned_pw_name = std.mem.span(passwd.?.pw_name.?);
+    const unowned_pw_name = std.mem.span(passwd.?.name.?);
     g.pw_name = try allocator.dupe(u8, unowned_pw_name);
 
     // create copy of passwd.pw_dir
-    const unowned_pw_dir = std.mem.span(passwd.?.pw_dir.?);
+    const unowned_pw_dir = std.mem.span(passwd.?.dir.?);
     g.pw_dir = try allocator.dupe(u8, unowned_pw_dir);
 }
 
@@ -96,7 +96,7 @@ fn StructFieldsType(comptime source_type: type) type {
     inline for (0.., fields) |i, field| {
         enum_fields[i] = .{ .name = field.name, .value = i };
     }
-    return @Type(.{ .Enum = .{
+    return @Type(.{ .@"enum" = .{
         .tag_type = i32,
         .fields = &enum_fields,
         .decls = &[_]std.builtin.Type.Declaration{},
