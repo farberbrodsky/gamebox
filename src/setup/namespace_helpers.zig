@@ -5,6 +5,8 @@ const binux = @import("../binux.zig");
 const uidmap = @import("uidmap.zig");
 const configuration = @import("configuration.zig");
 
+const ns_log = std.log.scoped(.namespaces);
+
 const UidRanges = struct {
     allocator: std.mem.Allocator,
     uid: std.ArrayListUnmanaged(uidmap.NewuidRange),
@@ -67,6 +69,7 @@ pub fn setupMounts(allocator: std.mem.Allocator) !void {
     const overlay_work = configuration.getOverlayWork();
 
     // Unshare mount updates from the parent
+    ns_log.debug("Unsharing mount-namespace updates", .{});
     try binux.mount("", "/", null, linux.MS.PRIVATE | linux.MS.REC, 0);
 
     // Mount an overlayfs instead of the image.
@@ -74,6 +77,7 @@ pub fn setupMounts(allocator: std.mem.Allocator) !void {
     const overlay_params = .{ image_path, overlay_upper, overlay_work };
     const overlay_params_str = try std.fmt.allocPrintZ(allocator, "lowerdir={s},upperdir={s},workdir={s}", overlay_params);
     defer allocator.free(overlay_params_str);
+    ns_log.debug("Overlaying filesystem with parameters {s}", .{overlay_params_str});
     binux.mount("overlay", image_path, "overlay", 0, @intFromPtr(@as([*:0]const u8, overlay_params_str))) catch |err| switch (err) {
         error.FileNotFound => {
             return error.OverlayFileNotFound;
@@ -82,6 +86,7 @@ pub fn setupMounts(allocator: std.mem.Allocator) !void {
     };
 
     // Enter image_path as the root, and keep the old root under /.oldroot
+    ns_log.debug("Calling pivot_root", .{});
     try posix.chdirZ(image_path);
     binux.pivot_root(".", OLD_ROOT_POINT) catch |err| switch (err) {
         error.FileNotFound => {
@@ -93,22 +98,32 @@ pub fn setupMounts(allocator: std.mem.Allocator) !void {
     };
 
     // add procfs and friends
+    ns_log.debug("Mounting standard filesystems", .{});
     try binux.mount("porkfs", "/proc", "proc", 0, 0);
     try setupDevFile("null");
     try setupDevFile("zero");
+    try setupDevFile("random");
+    try setupDevFile("urandom");
 
     // detach oldroot
+    ns_log.debug("Detaching old root", .{});
     try binux.umount2(OLD_ROOT_POINT, linux.MNT.DETACH);
+    ns_log.info("Now inside overlayed filesystem", .{});
 }
 
 /// Helper for setupMounts
 fn setupDevFile(comptime device_name: [:0]const u8) !void {
     const dst_path = "/dev/" ++ device_name;
     const src_path = "/" ++ OLD_ROOT_POINT ++ dst_path;
+    try fileBindMount(src_path, dst_path);
+}
 
+/// Creates a single-file bind mount, and may create the destination file if it does not exist.
+fn fileBindMount(src_path: [:0]const u8, dst_path: [:0]const u8) !void {
     binux.mount(src_path, dst_path, null, linux.MS.BIND, 0) catch |err| switch (err) {
         error.FileNotFound => {
             // try to recover by making the file
+            ns_log.warn("Trying to create file {s} since it might not have existed", .{dst_path});
             const fd = try posix.openZ(dst_path, .{ .CREAT = true }, 0);
             posix.close(fd);
             try binux.mount(src_path, dst_path, null, linux.MS.BIND, 0);
