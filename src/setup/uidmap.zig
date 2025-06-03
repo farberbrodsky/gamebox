@@ -5,6 +5,8 @@ const expect = std.testing.expect;
 const procutil = @import("../procutil.zig");
 const NewuidRange = @import("configuration.zig").NewuidRange;
 
+const uidmap_log = std.log.scoped(.uidmap);
+
 pub const SubuidRange = struct {
     start_id: posix.uid_t,
     count: posix.uid_t,
@@ -44,6 +46,7 @@ fn parseIdmapsFile(allocator: std.mem.Allocator, reader: anytype, my_uid: u32, m
         const subuser_count_buffer = try reader.readUntilDelimiterOrEof(column_buffer, '\n') orelse "";
         const subuser_count = try std.fmt.parseInt(posix.uid_t, subuser_count_buffer, 10);
 
+        uidmap_log.debug("parsed subusers in {s} - {d}, count {d}", .{ my_name, subuser_id, subuser_count });
         try result.append(.{ .start_id = subuser_id, .count = subuser_count });
     }
 
@@ -102,6 +105,7 @@ fn prepareApplyUidmaps(parent_allocator: std.mem.Allocator, pid: posix.pid_t, ra
     argv[0] = exec;
     argv[1] = try std.fmt.allocPrintZ(allocator, "{d}", .{pid});
     for (0.., ranges) |i, range| {
+        uidmap_log.debug("{s} parameters: inner {d} outer {d} count {d}", .{ exec, range.inner_id, range.outer_id, range.count });
         argv[2 + 3 * i + 0] = try std.fmt.allocPrintZ(allocator, "{d}", .{range.inner_id});
         argv[2 + 3 * i + 1] = try std.fmt.allocPrintZ(allocator, "{d}", .{range.outer_id});
         argv[2 + 3 * i + 2] = try std.fmt.allocPrintZ(allocator, "{d}", .{range.count});
