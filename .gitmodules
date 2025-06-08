@@ -1,0 +1,4 @@
+[submodule "vulkan-persist/Vulkan-Headers"]
+	path = vulkan-persist/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git
+	branch = vulkan-sdk-1.4.313

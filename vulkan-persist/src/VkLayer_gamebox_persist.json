@@ -1,0 +1,20 @@
+{
+    "file_format_version" : "1.0.0",
+    "layer" : {
+        "name": "VK_LAYER_GAMEBOX_persist",
+        "type": "GLOBAL",
+        "library_path": "/home/misha/code/gamebox/vulkan-persist/zig-out/lib/libvulkan_persist.so",
+        "api_version": "1.4.313",
+        "implementation_version": "1",
+        "description": "Gamebox checkpointing layer for Vulkan",
+        "functions": {
+            "vkCreateInstance": "VK_LAYER_GAMEBOX_persist_CreateInstance",
+            "vkGetInstanceProcAddr": "VK_LAYER_GAMEBOX_persist_GetInstanceProcAddr",
+            "vkGetDeviceProcAddr": "VK_LAYER_GAMEBOX_persist_GetDeviceProcAddr"
+        },
+        "enable_environment": {},
+        "disable_environment": {
+            "DISABLE_GAMEBOX_PERSIST": ""
+        }
+    }
+}
