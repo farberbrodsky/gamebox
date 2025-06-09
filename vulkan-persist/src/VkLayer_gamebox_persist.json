@@ -9,8 +9,7 @@
         "description": "Gamebox checkpointing layer for Vulkan",
         "functions": {
             "vkCreateInstance": "VK_LAYER_GAMEBOX_persist_CreateInstance",
-            "vkGetInstanceProcAddr": "VK_LAYER_GAMEBOX_persist_GetInstanceProcAddr",
-            "vkGetDeviceProcAddr": "VK_LAYER_GAMEBOX_persist_GetDeviceProcAddr"
+            "vkGetInstanceProcAddr": "VK_LAYER_GAMEBOX_persist_GetInstanceProcAddr"
         },
         "enable_environment": {},
         "disable_environment": {

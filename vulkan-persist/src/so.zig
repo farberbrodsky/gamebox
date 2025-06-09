@@ -1,8 +1,12 @@
 const std = @import("std");
 const testing = std.testing;
 const vk = @import("vkheaders.zig");
+const State = @import("state.zig");
 
-pub export fn VK_LAYER_GAMEBOX_persist_CreateInstance(pCreateInfo: *const vk.c.VkInstanceCreateInfo, pAllocator: *const vk.c.VkAllocationCallbacks, pInstance: ?*vk.Instance) callconv(.c) vk.c.VkResult {
+var global_lock = std.Thread.Mutex{};
+var global_state = State{};
+
+pub export fn VK_LAYER_GAMEBOX_persist_CreateInstance(pCreateInfo: *const vk.c.VkInstanceCreateInfo, pAllocator: *const vk.c.VkAllocationCallbacks, pInstance: *vk.Instance) callconv(.c) vk.c.VkResult {
     std.debug.print("CreateInstance\n", .{});
     // Find the VkLayerInstanceCreateInfo/VkLayerDeviceCreateInfo structure in the VkInstanceCreateInfo/VkDeviceCreateInfo structure.
     const chain_info = vk.get_chain_info(pCreateInfo, vk.c.VK_LAYER_LINK_INFO) orelse return vk.c.VK_ERROR_INITIALIZATION_FAILED;
@@ -25,14 +29,20 @@ pub export fn VK_LAYER_GAMEBOX_persist_CreateInstance(pCreateInfo: *const vk.c.V
 
     // Initialize the layer dispatch table by calling the next entity's Get*ProcAddr function once for each Vulkan function needed in the dispatch table
     // ...!!!
+    const state = global_state.append(pInstance.*, .{
+        .allocator = @ptrCast(pAllocator),
+        .pfnGetInstanceProcAddr = next_GetInstanceProcAddr,
+    }, &global_lock);
+    std.debug.print("CreateInstance created {x} instance {x}\n", .{@intFromPtr(state), @intFromPtr(pInstance.*)});
+
     return vk.c.VK_SUCCESS;
 }
 
 
-pub export fn VK_LAYER_GAMEBOX_persist_GetInstanceProcAddr(instance: ?*vk.Instance, name: ?[*:0]const u8) callconv(.c) vk.c.PFN_vkVoidFunction {
+pub export fn VK_LAYER_GAMEBOX_persist_GetInstanceProcAddr(instance: vk.Instance, name: ?[*:0]const u8) callconv(.c) vk.c.PFN_vkVoidFunction {
     if (name == null)
         return null;
-    std.debug.print("GetInstanceProcAddr({s})\n", .{name.?});
+    std.debug.print("GetInstanceProcAddr(instance={x}, name={s})\n", .{@intFromPtr(instance), name.?});
     if (instance == null)
         return null;
 
@@ -44,13 +54,12 @@ pub export fn VK_LAYER_GAMEBOX_persist_GetInstanceProcAddr(instance: ?*vk.Instan
     if (command_id) |c| return switch (c) {
         .vkCreateInstance => @ptrCast(&VK_LAYER_GAMEBOX_persist_CreateInstance)
     } else {
-        // Other command
-        return null;
-    }
-}
+        const state = global_state.find(instance.?) orelse {
+            std.debug.print("Instance is not recognized.\n", .{});
+            return null;
+        };
 
-pub export fn VK_LAYER_GAMEBOX_persist_GetDeviceProcAddr(device: ?*vk.Device, name: ?[*:0]const u8) callconv(.c) vk.c.PFN_vkVoidFunction {
-    _ = device;
-    std.debug.print("GetDeviceProcAddr({s})\n", .{name.?});
-    return null;
+        // Other command
+        return state.instance_info.pfnGetInstanceProcAddr.?(instance, name);
+    }
 }
