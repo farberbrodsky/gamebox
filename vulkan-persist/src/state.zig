@@ -1,109 +1,224 @@
-const State = @This();
 const std = @import("std");
 const vk = @import("vkheaders.zig");
 
-header: struct {
-    /// This state is relevant only if the instance matches
+fn vk_allocator_or_alternative(allocator: ?*const vk.Allocator) std.mem.Allocator {
+    if (allocator) |a| {
+        return a.allocator();
+    } else {
+        return std.heap.c_allocator;
+    }
+}
+
+const AnyInstance = ?*opaque{};
+const InstanceTableHeader = struct {
+    const Self = @This();
+
+    /// This entry is relevant only if the instance matches
     /// The real instance can't be null, but null can be used as a placeholder value if the first instance was destroyed.
-    instance: vk.Instance = null,
+    instance: AnyInstance = null,
 
     /// There is a next pointer if you need to look at the next state object. It is a lock-free (for readers) singly linked list.
     /// We are assuming that the common case is only a single Vulkan instance, but otherwise you need to traverse a linked list.
-    next: std.atomic.Value(?*State) = std.atomic.Value(?*State).init(null),
-} = .{},
+    next: std.atomic.Value(?*Self) = std.atomic.Value(?*Self).init(null),
 
-/// The following fields are taken from the instance
-instance_info: struct {
-    /// The allocator in here was used to allocate this state object, too! Except for the first one, which is optimized.
-    allocator: *const vk.Allocator = undefined,
+    /// The allocator in here was used to allocate this entry, too! Except for the first one, which is optimized.
+    allocator: ?*const vk.Allocator = undefined,
 
-    /// This is the vkGetInstanceProcAddr implementation of the following layer
-    pfnGetInstanceProcAddr: vk.c.PFN_vkGetInstanceProcAddr = undefined,
-} = .{},
+    pub fn alloc(self: *Self) std.mem.Allocator {
+        return vk_allocator_or_alternative(self.allocator);
+    }
+};
 
-/// Finds the State object for a given instance, given a pointer to the first State object.
-pub fn find(first: *State, instance: vk.Instance) ?*State {
-    std.debug.assert(instance != null);
-    var link: ?*State = first;
-    return while (link) |state| : (link = state.header.next.load(.acquire)) {
-        if (state.header.instance == instance)
-            break state;
-    } else null;
-}
+fn InstanceTable(comptime vk_type: type, comptime EntryStruct: type) type {
+    return struct {
+        const Entry = EntryStruct;
+        const Self = @This();
 
-/// Creates a new State object, either from this one (assumed to be the first) or by using its allocator
-/// May fail to allocate, and then return null.
-pub fn append(first: *State, instance: vk.Instance, instance_info: @TypeOf(first.instance_info), lock: *std.Thread.Mutex) ?*State {
-    // writes happen under a lock
-    lock.lock();
-    defer lock.unlock();
+        /// Writers need a lock, whereas readers are completely lock-free.
+        lock: std.Thread.Mutex = .{},
 
-    // Using the instance's allocator for the instance's State object
-    const alloc = instance_info.allocator.allocator();
+        /// The head is special because it's not allocated by the instance's own allocator. It's optimized by sitting inline.
+        /// If head's instance is null, then it can be reused.
+        head: Entry = .{},
 
-    // Either take the first entry, or create a new one
-    const new_state = if (first.header.instance == null)
-        first
-    else
-        alloc.create(State) catch return null;
+        /// Finds the entry for a given instance.
+        pub fn find(self: *Self, instance: vk_type) ?*Entry {
+            std.debug.assert(instance != null);
+            var link: ?*InstanceTableHeader = &self.head.header;
+            return while (link) |hdr| : (link = hdr.next.load(.acquire)) {
+                if (hdr.instance == @as(AnyInstance, @ptrCast(instance)))
+                    break @fieldParentPtr("header", hdr);
+            } else null;
+        }
 
-    // Put data into this entry
-    // NOTE: If next is already non-null for the first entry, keep it that way!
-    //       And if it's a new entry, then next is already set to null.
-    new_state.header.instance = instance;
-    new_state.instance_info = instance_info;
+        const Iterator = struct {
+            position: ?*InstanceTableHeader,
 
-    // Store into the linked list, unless it's the first entry
-    if (new_state != first) {
-        var link = first;
+            pub fn next(self: *Iterator) ?*Entry {
+                if (self.position) |h| {
+                    self.position = h.next.load(.acquire);
+                    return @fieldParentPtr("header", h);
+                } else {
+                    return null;
+                }
+            }
+        };
 
-        // Advance until the end of the list
-        while (true) {
-            const next = link.header.next.load(.unordered);
-            if (next) |l| {
-                link = l;
+        pub fn iterate(self: *Self) Iterator {
+            if (self.head.header.instance != null) {
+                return .{ .position = &self.head.header };
             } else {
-                break;
+                return .{ .position = self.head.header.next.load(.acquire) };
             }
         }
 
-        link.header.next.store(new_state, .release);
-    }
+        /// Creates a new entry, either from head or by using its allocator
+        /// May fail to allocate, and then return null.
+        pub fn append(self: *Self, instance: vk_type, allocator: ?*const vk.Allocator, entry_init: Entry.initializer) ?*Entry {
+            std.debug.assert(instance != null);
+            // writes happen under a lock
+            self.lock.lock();
+            defer self.lock.unlock();
 
-    return new_state;
-}
+            // Using the instance's allocator for the instance's entry
+            const alloc = vk_allocator_or_alternative(allocator);
 
-pub fn destroy(first: *State, instance: vk.Instance, lock: *std.Thread.Mutex) void {
-    // writes happen under a lock
-    lock.lock();
-    defer lock.unlock();
+            // Either take the head, or create a new entry
+            const new_state = if (self.head.header.instance == null)
+                &self.head
+            else
+                alloc.create(Entry) catch return null;
 
-    if (first.header.instance == instance) {
-        // The only solution is to assign null to instance. We can't free the object.
-        first.header.instance = null;
-        return;
-    } else {
-        // Find the state object before the one we are removing
-        var link: ?*State = first;
-        var next: ?*State = undefined;
-        while (link) {
-            next = link.header.next.load(.unordered);
-            if (next.header.instance == instance)
-                break;
-            link = next;
+            // Put data into this entry
+            // NOTE: If next is already non-null for the head, keep it that way!
+            //       And if it's a new entry, then next is already set to null.
+            new_state.header.instance = @as(AnyInstance, @ptrCast(instance));
+            new_state.header.allocator = allocator;
+            const init_result = new_state.init(entry_init);
+            if (!init_result) {
+                // failed to initialize. Destroy everything.
+                if (&new_state.header != &self.head.header) {
+                    alloc.destroy(new_state);
+                } else {
+                    new_state.header.instance = null;
+                }
+                return null;
+            }
+
+            // Store into the linked list, unless it's the head
+            if (&new_state.header != &self.head.header) {
+                var link = &self.head.header;
+
+                // Advance until the end of the list
+                while (true) {
+                    const next = link.next.load(.unordered);
+                    if (next) |l| {
+                        link = l;
+                    } else {
+                        break;
+                    }
+                }
+
+                link.next.store(&new_state.header, .release);
+            }
+
+            return new_state;
         }
 
-        if (link == null) {
-            // instance should be known to us
-            std.debug.panic("Instance being destroyed does not appear in any records\n", .{});
-            return;
-        } else |prev| {
-            // Unlink the destroyed entry
-            const destroyed = next.?;
-            prev.header.next = destroyed.header.next;
-            // Destroy it with its own allocator
-            const alloc = destroyed.instance_info.allocator.allocator();
-            alloc.destroy(destroyed);
+        pub fn destroy(self: *Self, instance: vk_type) void {
+            std.debug.assert(instance != null);
+            // writes happen under a lock
+            self.lock.lock();
+            defer self.lock.unlock();
+
+            if (self.head.header.instance == @as(AnyInstance, @ptrCast(instance))) {
+                // The only solution is to assign null to instance. We can't free the object.
+                self.head.header.instance = null;
+                self.head.deinit();
+                return;
+            } else {
+                // Find the state object before the one we are removing
+                var link: ?*Entry = self.head;
+                var next: ?*Entry = undefined;
+                while (link) {
+                    next = link.header.next.load(.unordered);
+                    if (next.header.instance == @as(AnyInstance, @ptrCast(instance)))
+                        break;
+                    link = next;
+                }
+
+                if (link == null) {
+                    // instance should be known to us
+                    std.debug.panic("Instance being destroyed does not appear in any records\n", .{});
+                    return;
+                } else |prev| {
+                    // Destroy and unlink the destroyed entry
+                    const destroyed = next.?;
+                    destroyed.deinit();
+                    prev.header.next.store(destroyed.header.next.load(.unordered), .release);
+                    // Destroy it with its own allocator
+                    const alloc = destroyed.header.alloc();
+                    alloc.destroy(destroyed);
+                }
+            }
         }
-    }
+    };
 }
+
+pub const InstanceState = InstanceTable(vk.Instance, struct {
+    const Self = @This();
+    header: InstanceTableHeader = .{},
+
+    // From the initializer:
+    nextGetInstanceProcAddr: vk.c.PFN_vkGetInstanceProcAddr = undefined,
+
+    // Automatically initialized:
+    phys_device_set: std.hash_map.AutoHashMapUnmanaged(vk.c.VkPhysicalDevice, void) = undefined,
+    pfnCreateDevice: vk.c.PFN_vkCreateDevice = undefined,
+    pfnEnumeratePhysicalDevices: vk.c.PFN_vkEnumeratePhysicalDevices = undefined,
+
+    const initializer = struct {vk.c.PFN_vkGetInstanceProcAddr};
+    pub fn init(self: *Self, i: initializer) bool {
+        self.nextGetInstanceProcAddr = i[0];
+        self.phys_device_set = @TypeOf(self.phys_device_set).empty;
+        self.pfnCreateDevice = @ptrCast(self.nextGetInstanceProcAddr.?(@ptrCast(self.header.instance), "vkCreateDevice") orelse return false);
+        self.pfnEnumeratePhysicalDevices = @ptrCast(self.nextGetInstanceProcAddr.?(@ptrCast(self.header.instance), "vkEnumeratePhysicalDevices") orelse return false);
+        return true;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.phys_device_set.deinit(self.header.allocator.allocator());
+    }
+
+    pub fn add_device(self: *Self, device: vk.c.VkPhysicalDevice) !void {
+        std.debug.print("xyz: {any}\n", .{self.phys_device_set});
+        try self.phys_device_set.put(self.header.alloc(), device, {});
+    }
+
+    pub fn has_device(self: *Self, device: vk.c.VkPhysicalDevice) bool {
+        return self.phys_device_set.get(device) != null;
+    }
+});
+
+pub const DeviceState = InstanceTable(vk.Device, struct {
+    const Self = @This();
+    header: InstanceTableHeader = .{},
+
+    // From the initializer:
+    parent_state: *InstanceState.Entry = undefined,
+    pfnGetDeviceProcAddr: vk.c.PFN_vkGetDeviceProcAddr = undefined,
+
+    // Automatically initialized:
+    // ...
+
+    const initializer = struct {*InstanceState.Entry, vk.c.PFN_vkGetDeviceProcAddr};
+    pub fn init(self: *Self, i: initializer) bool {
+        self.parent_state = i[0];
+        self.pfnGetDeviceProcAddr = i[1];
+        return true;
+    }
+
+    pub fn deinit(self: *Self) void {
+        _ = self;
+    }
+});

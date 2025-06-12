@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
         .name = "vulkan_persist",
         .root_module = so_mod,
     });
+    lib.linkLibC();
     lib.addIncludePath(b.path("Vulkan-Headers/include"));
     b.installArtifact(lib);
 
