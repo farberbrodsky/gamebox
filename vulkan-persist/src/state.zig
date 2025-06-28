@@ -1,14 +1,6 @@
 const std = @import("std");
 const vk = @import("vkheaders.zig");
 
-fn vk_allocator_or_alternative(allocator: ?*const vk.Allocator) std.mem.Allocator {
-    if (allocator) |a| {
-        return a.allocator();
-    } else {
-        return std.heap.c_allocator;
-    }
-}
-
 const AnyInstance = ?*opaque{};
 const InstanceTableHeader = struct {
     const Self = @This();
@@ -22,10 +14,11 @@ const InstanceTableHeader = struct {
     next: std.atomic.Value(?*Self) = std.atomic.Value(?*Self).init(null),
 
     /// The allocator in here was used to allocate this entry, too! Except for the first one, which is optimized.
+    /// It is nullable because some vulkan users pass a null VkAllocator
     allocator: ?*const vk.Allocator = undefined,
 
     pub fn alloc(self: *Self) std.mem.Allocator {
-        return vk_allocator_or_alternative(self.allocator);
+        return vk.Allocator.allocator(self.allocator);
     }
 };
 
@@ -81,7 +74,7 @@ fn InstanceTable(comptime vk_type: type, comptime EntryStruct: type) type {
             defer self.lock.unlock();
 
             // Using the instance's allocator for the instance's entry
-            const alloc = vk_allocator_or_alternative(allocator);
+            const alloc = vk.Allocator.allocator(allocator);
 
             // Either take the head, or create a new entry
             const new_state = if (self.head.header.instance == null)

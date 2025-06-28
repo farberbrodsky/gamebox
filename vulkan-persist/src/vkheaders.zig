@@ -18,16 +18,21 @@ pub const Allocator = extern struct {
     pfnInternalAllocation: c.PFN_vkInternalAllocationNotification,
     pfnInternalFree: c.PFN_vkInternalFreeNotification,
 
-    pub fn allocator(self: *const Allocator) std.mem.Allocator {
-        return .{
-            .ptr = @constCast(self),
-            .vtable = &.{
-                .alloc = alloc,
-                .resize = resize,
-                .remap = remap,
-                .free = free
-            }
-        };
+    /// We are supporting the usage of a null VkAllocator if you want to use libc's allocator
+    pub fn allocator(self: ?*const Allocator) std.mem.Allocator {
+        if (self) |v| {
+            return .{
+                .ptr = @constCast(v),
+                .vtable = &.{
+                    .alloc = alloc,
+                    .resize = resize,
+                    .remap = remap,
+                    .free = free
+                }
+            };
+        } else {
+            return std.heap.c_allocator;
+        }
     }
 
     fn alloc(ctx: *const anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
