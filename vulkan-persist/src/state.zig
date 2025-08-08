@@ -1,7 +1,7 @@
 const std = @import("std");
 const vk = @import("vkheaders.zig");
 
-const AnyInstance = ?*opaque{};
+const AnyInstance = ?*opaque {};
 const InstanceTableHeader = struct {
     const Self = @This();
 
@@ -170,17 +170,22 @@ pub const InstanceState = InstanceTable(vk.Instance, struct {
     pfnCreateDevice: vk.c.PFN_vkCreateDevice = undefined,
     pfnEnumeratePhysicalDevices: vk.c.PFN_vkEnumeratePhysicalDevices = undefined,
 
-    const initializer = struct {vk.c.PFN_vkGetInstanceProcAddr};
+    const initializer = struct { vk.c.PFN_vkGetInstanceProcAddr };
     pub fn init(self: *Self, i: initializer) bool {
         self.nextGetInstanceProcAddr = i[0];
         self.phys_device_set = @TypeOf(self.phys_device_set).empty;
-        self.pfnCreateDevice = @ptrCast(self.nextGetInstanceProcAddr.?(@ptrCast(self.header.instance), "vkCreateDevice") orelse return false);
-        self.pfnEnumeratePhysicalDevices = @ptrCast(self.nextGetInstanceProcAddr.?(@ptrCast(self.header.instance), "vkEnumeratePhysicalDevices") orelse return false);
+        self.pfnCreateDevice = @ptrCast(self.get_proc_addr("vkCreateDevice") orelse return false);
+        self.pfnEnumeratePhysicalDevices = @ptrCast(self.get_proc_addr("vkEnumeratePhysicalDevices") orelse return false);
         return true;
     }
 
     pub fn deinit(self: *Self) void {
         self.phys_device_set.deinit(self.header.allocator.allocator());
+    }
+
+    /// Can be called in init() but only after initializing nextGetInstanceProcAddr.
+    fn get_proc_addr(self: *Self, fn_name: [*:0]const u8) ?vk.c.PFN_vkVoidFunction {
+        return self.nextGetInstanceProcAddr.?(@ptrCast(self.header.instance), fn_name);
     }
 
     pub fn add_device(self: *Self, device: vk.c.VkPhysicalDevice) !void {
@@ -204,7 +209,7 @@ pub const DeviceState = InstanceTable(vk.Device, struct {
     // Automatically initialized:
     // ...
 
-    const initializer = struct {*InstanceState.Entry, vk.c.PFN_vkGetDeviceProcAddr};
+    const initializer = struct { *InstanceState.Entry, vk.c.PFN_vkGetDeviceProcAddr };
     pub fn init(self: *Self, i: initializer) bool {
         self.parent_state = i[0];
         self.pfnGetDeviceProcAddr = i[1];
