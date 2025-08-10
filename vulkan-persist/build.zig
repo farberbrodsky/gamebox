@@ -6,10 +6,32 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // Build dependencies
+    const xml = b.dependency("xml", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Code generation tools
+    const tool = b.addExecutable(.{
+        .name = "generate_vk_wrappers",
+        .root_source_file = b.path("tools/generate_vk_wrappers.zig"),
+        .target = b.graph.host,
+    });
+    tool.root_module.addImport("xml", xml.module("xml"));
+
+    const tool_step = b.addRunArtifact(tool);
+    const tool_output = tool_step.addOutputFileArg("vk_wrappers.zig");
+
     const so_mod = b.createModule(.{
         .root_source_file = b.path("src/so.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    so_mod.addAnonymousImport("vk_wrappers", .{
+        .root_source_file = tool_output,
     });
 
     const example_mod = b.createModule(.{

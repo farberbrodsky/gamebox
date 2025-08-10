@@ -3,6 +3,7 @@ const testing = std.testing;
 const vk = @import("vkheaders.zig");
 const State = @import("state.zig");
 const proc_definitions = @import("proc_definitions.zig");
+const wrappers = @import("vk_wrappers");
 
 var instance_table: State.InstanceState = .{};
 var device_table: State.DeviceState = .{};
