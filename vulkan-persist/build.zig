@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
     tool.root_module.addImport("xml", xml.module("xml"));
 
     const tool_step = b.addRunArtifact(tool);
+    tool_step.addFileArg(b.path("Vulkan-Headers/registry/vk.xml"));
     const tool_output = tool_step.addOutputFileArg("vk_wrappers.zig");
 
     const so_mod = b.createModule(.{
