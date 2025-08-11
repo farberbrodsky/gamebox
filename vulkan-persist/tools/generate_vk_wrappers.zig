@@ -1,20 +1,22 @@
 const std = @import("std");
 const xml = @import("xml");
 
-fn readInsideElement(xmlReader: *xml.Reader, elementName: []const u8) !?xml.Reader.Node {
-    const node = try xmlReader.read();
+/// Reads all properties of an element until we reach its end.
+/// There is no tracking of depth - rather, we ensure that no others tags of the same name begin.
+fn readInsideElement(xml_reader: *xml.Reader, end_element_name: []const u8) !?xml.Reader.Node {
+    const node = try xml_reader.read();
 
     if (node == .eof) {
         // this element needs to end
         return error.UnexpectedEndOfXml;
     }
 
-    if (node == .element_end and std.mem.eql(u8, xmlReader.elementName(), elementName)) {
+    if (node == .element_end and std.mem.eql(u8, xml_reader.elementName(), end_element_name)) {
         // this element ended
         return null;
     }
 
-    if (node == .element_start and std.mem.eql(u8, xmlReader.elementName(), elementName)) {
+    if (node == .element_start and std.mem.eql(u8, xml_reader.elementName(), end_element_name)) {
         // Recursion is not supported
         return error.XmlRecursion;
     }
@@ -22,26 +24,119 @@ fn readInsideElement(xmlReader: *xml.Reader, elementName: []const u8) !?xml.Read
     return node;
 }
 
-fn parseCommand(alloc: std.mem.Allocator, xmlReader: *xml.Reader) !void {
-    _ = .{alloc};
-    std.debug.print("Parsing a command\n", .{});
+/// Similar to `readInsideElement`, and uses it internally.
+/// This function is used to find the beginning of one of the desired elements represented in ElementSet.
+fn findNextElement(ElementSet: anytype, xml_reader: *xml.Reader, end_element_name: []const u8) !?ElementSet {
+    switch (@typeInfo(ElementSet)) { .@"enum" => {}, else => @compileError("ElementSet must be an enum") }
 
-    for (0..xmlReader.attributeCount()) |i| {
-        const attribute_name = xmlReader.attributeNameNs(i);
-        std.debug.print("attrib '{s}'\n", .{attribute_name.local});
-    }
+    return while (true) {
+        // End of stream and errors are both propagated out of here
+        const node = try readInsideElement(xml_reader, end_element_name) orelse break null;
 
-    while (try readInsideElement(xmlReader, "command")) |childNode| {
-        switch (childNode) {
-            .eof => {
-                fatal("Unexpected EOF\n", .{});
-            },
-            else => {},
+        // Is the desired element starting?
+        if (node == .element_start) {
+            const maybe_enum_value: ?ElementSet = std.meta.stringToEnum(ElementSet, xml_reader.elementName());
+
+            if (maybe_enum_value) |enum_value| {
+                // This is the only success case
+                break enum_value;
+            }
         }
-    }
+    };
 }
 
-const ElementParsers = std.StaticStringMap(*const fn (std.mem.Allocator, *xml.Reader) anyerror!void).initComptime(.{
+/// Used for:
+/// - Command parameters
+/// - Struct members
+const Field = struct {
+    type_name: ?[]const u8 = null,
+    is_optional1: bool = false,
+    is_optional2: bool = false,
+    length_annotation: ?[]const u8 = null,
+};
+
+/// Each <command> XML tag is parsed into this object
+const Command = struct {
+    return_type_name: ?[]const u8 = null,
+    name: ?[]const u8 = null,
+    params: ?[]Field = null,
+
+    pub fn init() Command {
+        return .{};
+    }
+
+    pub fn format(command: Command, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("Command {?s}(return_type_name={?s}", .{ command.name, command.return_type_name });
+        if (command.params) |params_slice| for (params_slice) |param| {
+            try writer.print(", {}", .{ param });
+        };
+        try writer.print(")", .{});
+    }
+};
+
+/// Represents the state of parsing. Every tag that is parsed gets stored into this state object.
+const ParseState = struct {
+    /// Freeing is not expected, so this is an arena
+    arena: std.mem.Allocator,
+
+    commands: std.ArrayListUnmanaged(Command),
+
+    pub fn init(arena: std.mem.Allocator) !ParseState {
+        return .{
+            .arena = arena,
+            .commands = try std.ArrayListUnmanaged(Command).initCapacity(arena, 1000)
+        };
+    }
+
+    pub fn addCommand(self: *ParseState) !*Command {
+        const result = try self.commands.addOne(self.arena);
+        result.* = Command.init();
+        return result;
+    }
+
+    pub fn unaddCommand(self: *ParseState) void {
+        _ = self.commands.pop();
+    }
+};
+
+fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
+    // Allocate a command object
+    var parse_command = try state.addCommand();
+
+    // for (0..xml_reader.attributeCount()) |i| {
+    //     const attribute_name = xml_reader.attributeNameNs(i);
+    //     std.debug.print("attrib '{s}'\n", .{attribute_name.local});
+    // }
+
+    const ChildTags = enum {
+        proto,
+    };
+    while (try findNextElement(ChildTags, xml_reader, "command")) |child_node| switch (child_node) {
+        .proto => {
+            std.debug.print("Found proto\n", .{});
+            const ProtoChildTags = enum { @"type", name, };
+            while (try findNextElement(ProtoChildTags, xml_reader, "proto")) |proto_child_node| switch (proto_child_node) {
+                .@"type" => {
+                    std.debug.print("Found proto's type\n", .{});
+                    parse_command.return_type_name = try xml_reader.readElementTextAlloc(state.arena);
+                },
+                .name => {
+                    parse_command.name = try xml_reader.readElementTextAlloc(state.arena);
+                },
+            };
+        }
+    };
+
+    // Name parameter of the command must not be null
+    if (parse_command.name == null) {
+        state.unaddCommand();
+        return;
+    }
+
+    std.debug.print("Parsed a command {}\n", .{parse_command});
+}
+
+const ElementParsers = std.StaticStringMap(*const fn (*ParseState, *xml.Reader) anyerror!void).initComptime(.{
     .{ "command", parseCommand },
 });
 
@@ -61,10 +156,10 @@ pub fn main() !void {
     defer input_file.close();
 
     // For usage, see: https://github.com/ianprime0509/zig-xml/blob/c12dbb48606f716773a1ddf7d9b14e07524d1436/examples/reader.zig
-    var xmlDoc = xml.streamingDocument(arena, input_file.reader());
-    defer xmlDoc.deinit();
-    var xmlReader = xmlDoc.reader(arena, .{});
-    defer xmlReader.deinit();
+    var xml_doc = xml.streamingDocument(arena, input_file.reader());
+    defer xml_doc.deinit();
+    var xml_reader = xml_doc.reader(arena, .{});
+    defer xml_reader.deinit();
 
     const output_file_path = args[2];
     var output_file = std.fs.cwd().createFile(output_file_path, .{}) catch |err| {
@@ -72,15 +167,17 @@ pub fn main() !void {
     };
     defer output_file.close();
 
+    var parse_state = try ParseState.init(arena);
+
     while (true) {
-        const node = xmlReader.read() catch |err| fatalXmlError(xmlReader, err);
+        const node = xml_reader.read() catch |err| fatalXmlError(xml_reader, err);
 
         switch (node) {
             .eof => break,
             .element_start => {
-                const elementName = xmlReader.elementName();
-                if (ElementParsers.get(elementName)) |elementParser| {
-                    elementParser(arena, &xmlReader.reader) catch |err| fatalXmlError(xmlReader, err);
+                const element_name = xml_reader.elementName();
+                if (ElementParsers.get(element_name)) |elementParser| {
+                    elementParser(&parse_state, &xml_reader.reader) catch |err| fatalXmlError(xml_reader, err);
                 }
             },
             else => {},
