@@ -25,6 +25,10 @@ pub fn build(b: *std.Build) void {
     tool_step.addFileArg(b.path("Vulkan-Headers/registry/vk.xml"));
     const tool_output = tool_step.addOutputFileArg("vk_wrappers.zig");
 
+    // Code generation debugging
+    const build_the_generator_cmd = b.step("build-generator", "Build vulkan wrappers generator");
+    build_the_generator_cmd.dependOn(&b.addInstallArtifact(tool, .{}).step);
+
     const so_mod = b.createModule(.{
         .root_source_file = b.path("src/so.zig"),
         .target = target,
