@@ -9,18 +9,21 @@ fn readInsideElement(xmlReader: *xml.Reader, elementName: []const u8) !?xml.Read
         return error.UnexpectedEndOfXml;
     }
 
-    if (node == .element_end) {
-        if (std.mem.eql(u8, xmlReader.elementName(), elementName)) {
-            // this element ended
-            return null;
-        }
+    if (node == .element_end and std.mem.eql(u8, xmlReader.elementName(), elementName)) {
+        // this element ended
+        return null;
+    }
+
+    if (node == .element_start and std.mem.eql(u8, xmlReader.elementName(), elementName)) {
+        // Recursion is not supported
+        return error.XmlRecursion;
     }
 
     return node;
 }
 
 fn parseCommand(alloc: std.mem.Allocator, xmlReader: *xml.Reader) !void {
-    _ = .{ alloc };
+    _ = .{alloc};
     std.debug.print("Parsing a command\n", .{});
 
     for (0..xmlReader.attributeCount()) |i| {
@@ -30,7 +33,9 @@ fn parseCommand(alloc: std.mem.Allocator, xmlReader: *xml.Reader) !void {
 
     while (try readInsideElement(xmlReader, "command")) |childNode| {
         switch (childNode) {
-            .eof => { fatal("Unexpected EOF\n", .{}); },
+            .eof => {
+                fatal("Unexpected EOF\n", .{});
+            },
             else => {},
         }
     }
@@ -99,6 +104,9 @@ fn fatalXmlError(xmlReader: anytype, err: anyerror) noreturn {
         },
         error.UnexpectedEndOfXml => {
             fatal("Unexpected end of XML", .{});
+        },
+        error.XmlRecursion => {
+            fatal("Unexpected XML recursion", .{});
         },
         else => {
             fatal("Unexpected error in XML reader", .{});
