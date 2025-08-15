@@ -70,10 +70,18 @@ pub const Command = struct {
     }
 
     pub fn format(command: Command, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("Command {?s}(return_type_name={?s}", .{ command.name, command.return_type_name });
-        if (command.params) |params_slice| for (params_slice) |param| {
-            try writer.print(", {}", .{param});
-        };
+        try writer.print("Command     {?s} {?s}(", .{ command.return_type_name, command.name });
+        if (command.params) |params_slice| {
+            var first = true;
+            for (params_slice) |param| {
+                if (first) {
+                    first = false;
+                } else {
+                    try writer.print(", ", .{});
+                }
+                try writer.print("{?s}", .{param.type_name});
+            }
+        }
         try writer.print(")", .{});
     }
 };
@@ -125,7 +133,10 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
 
     const ChildTags = enum {
         proto,
+        param,
     };
+    var params = std.ArrayList(Field).init(state.arena);
+    defer params.deinit();
     while (try findNextElement(ChildTags, xml_reader, "command")) |child_node| switch (child_node) {
         .proto => {
             std.debug.print("Found proto\n", .{});
@@ -143,8 +154,25 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
                 },
             };
         },
+        .param => {
+            std.debug.print("Found param\n", .{});
+            const ParamChildTags = enum {
+                type,
+                name,
+            };
+            var param = Field{};
+            while (try findNextElement(ParamChildTags, xml_reader, "param")) |param_child_node| switch (param_child_node) {
+                .type => {
+                    std.debug.print("Found param's type\n", .{});
+                    param.type_name = try xml_reader.readElementTextAlloc(state.arena);
+                },
+                .name => {},
+            };
+            try params.append(param);
+        },
     };
 
+    parse_command.params = try params.toOwnedSlice();
     std.debug.print("Parsed a command {}\n", .{parse_command});
 }
 
