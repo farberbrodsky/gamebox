@@ -211,7 +211,7 @@ pub fn main() !void {
 
     for (parse_state.commands.items, command_function_map) |command, command_names| {
         const wrapper_name = command_names[1];
-        codegen.generateWrapperFunction(&code_writer, wrapper_name, command);
+        codegen.generateWrapperFunction(&code_writer, wrapper_name, &command);
     }
 
     if (code_writer.err) |e| return e;
