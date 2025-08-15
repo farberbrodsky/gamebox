@@ -52,7 +52,7 @@ fn findNextElement(ElementSet: anytype, xml_reader: *xml.Reader, end_element_nam
 /// Used for:
 /// - Command parameters
 /// - Struct members
-const Field = struct {
+pub const Field = struct {
     type_name: ?[]const u8 = null,
     is_optional1: bool = false,
     is_optional2: bool = false,
@@ -60,7 +60,7 @@ const Field = struct {
 };
 
 /// Each <command> XML tag is parsed into this object
-const Command = struct {
+pub const Command = struct {
     return_type_name: ?[]const u8 = null,
     name: ?[]const u8 = null,
     params: ?[]Field = null,
@@ -104,10 +104,24 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
     // Allocate a command object
     var parse_command = try state.addCommand();
 
-    // for (0..xml_reader.attributeCount()) |i| {
-    //     const attribute_name = xml_reader.attributeNameNs(i);
-    //     std.debug.print("attrib '{s}'\n", .{attribute_name.local});
-    // }
+    defer {
+        // un-add the command if it isn't complete
+        if (parse_command.name == null) {
+            state.unaddCommand();
+        }
+    }
+
+    for (0..xml_reader.attributeCount()) |i| {
+        const attribute_name = xml_reader.attributeName(i);
+        if (std.mem.eql(u8, attribute_name, "api")) {
+            const attribute_value = try xml_reader.attributeValue(i);
+            if (!std.mem.eql(u8, attribute_value, "vulkan")) {
+                // Ignore the element
+                while (try readInsideElement(xml_reader, "command") != null) {}
+                return;
+            }
+        }
+    }
 
     const ChildTags = enum {
         proto,
@@ -130,12 +144,6 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
             };
         },
     };
-
-    // Name parameter of the command must not be null
-    if (parse_command.name == null) {
-        state.unaddCommand();
-        return;
-    }
 
     std.debug.print("Parsed a command {}\n", .{parse_command});
 }
@@ -193,11 +201,18 @@ pub fn main() !void {
     code_writer.line("const std = @import(\"std\");", .{});
     code_writer.line("const vk = @import(\"vk_headers\");", .{});
 
-    const command_names = try arena.alloc([]const u8, parse_state.commands.items.len);
+    const command_function_map = try arena.alloc(struct { []const u8, []const u8 }, parse_state.commands.items.len);
     for (0.., parse_state.commands.items) |i, command| {
-        command_names[i] = command.name orelse return error.UnnamedCommand;
+        const name = command.name orelse return error.UnnamedCommand;
+        const wrapper_name = try std.fmt.allocPrint(arena, "{s}_wrapper", .{name});
+        command_function_map[i] = .{ name, wrapper_name };
     }
-    codegen.generateFunctionMap("InstanceFunctions", &code_writer, command_names);
+    codegen.generateFunctionMap(&code_writer, "InstanceFunctions", command_function_map);
+
+    for (parse_state.commands.items, command_function_map) |command, command_names| {
+        const wrapper_name = command_names[1];
+        codegen.generateWrapperFunction(&code_writer, wrapper_name, command);
+    }
 
     if (code_writer.err) |e| return e;
     return std.process.cleanExit();
