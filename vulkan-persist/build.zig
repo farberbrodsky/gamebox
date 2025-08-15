@@ -35,9 +35,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    so_mod.addAnonymousImport("vk_wrappers", .{
+    const vkheaders_mod = b.createModule(.{
+        .root_source_file = b.path("src/vkheaders.zig"),
+    });
+
+    const vkwrappers_mod = b.createModule(.{
         .root_source_file = tool_output,
     });
+
+    vkwrappers_mod.addImport("vk_headers", vkheaders_mod);
+    so_mod.addImport("vk_headers", vkheaders_mod);
+    so_mod.addImport("vk_wrappers", vkwrappers_mod);
 
     const example_mod = b.createModule(.{
         .root_source_file = b.path("src/example.zig"),

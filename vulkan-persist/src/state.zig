@@ -1,5 +1,5 @@
 const std = @import("std");
-const vk = @import("vkheaders.zig");
+const vk = @import("vk_headers");
 
 const AnyInstance = ?*opaque {};
 const InstanceTableHeader = struct {

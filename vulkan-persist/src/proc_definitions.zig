@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const vk = @import("vkheaders.zig");
+const vk = @import("vk_headers");
 const so = @import("so.zig");
 
 const FunctionPair = struct { []const u8, vk.c.PFN_vkVoidFunction };

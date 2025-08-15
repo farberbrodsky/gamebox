@@ -188,17 +188,18 @@ pub fn main() !void {
         }
     }
 
-    try output_file.writeAll(
-        \\pub const Person = struct {
-        \\   age: usize = 18,
-        \\   name: []const u8 = "foo"
-        \\};
-    );
-
     var code_writer: codegen.CodeWriter = .{ .writer = output_file.writer().any() };
 
-    code_writer.line("hello world", .{});
+    code_writer.line("const std = @import(\"std\");", .{});
+    code_writer.line("const vk = @import(\"vk_headers\");", .{});
 
+    const command_names = try arena.alloc([]const u8, parse_state.commands.items.len);
+    for (0.., parse_state.commands.items) |i, command| {
+        command_names[i] = command.name orelse return error.UnnamedCommand;
+    }
+    codegen.generateFunctionMap("InstanceFunctions", &code_writer, command_names);
+
+    if (code_writer.err) |e| return e;
     return std.process.cleanExit();
 }
 
