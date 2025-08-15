@@ -1,5 +1,6 @@
 const std = @import("std");
 const xml = @import("xml");
+const codegen = @import("generate_vk_wrappers/codegen.zig");
 
 /// Reads all properties of an element until we reach its end.
 /// There is no tracking of depth - rather, we ensure that no others tags of the same name begin.
@@ -27,7 +28,10 @@ fn readInsideElement(xml_reader: *xml.Reader, end_element_name: []const u8) !?xm
 /// Similar to `readInsideElement`, and uses it internally.
 /// This function is used to find the beginning of one of the desired elements represented in ElementSet.
 fn findNextElement(ElementSet: anytype, xml_reader: *xml.Reader, end_element_name: []const u8) !?ElementSet {
-    switch (@typeInfo(ElementSet)) { .@"enum" => {}, else => @compileError("ElementSet must be an enum") }
+    switch (@typeInfo(ElementSet)) {
+        .@"enum" => {},
+        else => @compileError("ElementSet must be an enum"),
+    }
 
     return while (true) {
         // End of stream and errors are both propagated out of here
@@ -68,7 +72,7 @@ const Command = struct {
     pub fn format(command: Command, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("Command {?s}(return_type_name={?s}", .{ command.name, command.return_type_name });
         if (command.params) |params_slice| for (params_slice) |param| {
-            try writer.print(", {}", .{ param });
+            try writer.print(", {}", .{param});
         };
         try writer.print(")", .{});
     }
@@ -82,10 +86,7 @@ const ParseState = struct {
     commands: std.ArrayListUnmanaged(Command),
 
     pub fn init(arena: std.mem.Allocator) !ParseState {
-        return .{
-            .arena = arena,
-            .commands = try std.ArrayListUnmanaged(Command).initCapacity(arena, 1000)
-        };
+        return .{ .arena = arena, .commands = try std.ArrayListUnmanaged(Command).initCapacity(arena, 1000) };
     }
 
     pub fn addCommand(self: *ParseState) !*Command {
@@ -114,9 +115,12 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
     while (try findNextElement(ChildTags, xml_reader, "command")) |child_node| switch (child_node) {
         .proto => {
             std.debug.print("Found proto\n", .{});
-            const ProtoChildTags = enum { @"type", name, };
+            const ProtoChildTags = enum {
+                type,
+                name,
+            };
             while (try findNextElement(ProtoChildTags, xml_reader, "proto")) |proto_child_node| switch (proto_child_node) {
-                .@"type" => {
+                .type => {
                     std.debug.print("Found proto's type\n", .{});
                     parse_command.return_type_name = try xml_reader.readElementTextAlloc(state.arena);
                 },
@@ -124,7 +128,7 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
                     parse_command.name = try xml_reader.readElementTextAlloc(state.arena);
                 },
             };
-        }
+        },
     };
 
     // Name parameter of the command must not be null
@@ -190,6 +194,11 @@ pub fn main() !void {
         \\   name: []const u8 = "foo"
         \\};
     );
+
+    var code_writer: codegen.CodeWriter = .{ .writer = output_file.writer().any() };
+
+    code_writer.line("hello world", .{});
+
     return std.process.cleanExit();
 }
 
