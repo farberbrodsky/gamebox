@@ -16,3 +16,16 @@ pub fn generateFunctionList(cw: *CodeWriter, const_name: []const u8, function_na
     defer cw.leaveIndent();
     cw.lineRaw("};");
 }
+
+pub fn generateDispatchTableStruct(cw: *CodeWriter, struct_name: []const u8, function_names: []const struct { []const u8, []const u8 }) void {
+    cw.enterContextComment("generateDispatchTableStruct");
+    defer cw.leaveContextComment("generateDispatchTableStruct");
+
+    cw.line("pub const {s} = struct {{", .{struct_name});
+    cw.enterIndent();
+    for (function_names) |function_name| {
+        cw.line("{s}: ?vk.c.PFN_vkVoidFunction = null,", .{function_name[0]});
+    }
+    cw.leaveIndent();
+    cw.line("};", .{});
+}

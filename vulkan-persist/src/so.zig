@@ -33,6 +33,12 @@ pub export fn VK_LAYER_GAMEBOX_persist_CreateInstance(pCreateInfo: *const vk.c.V
     }) orelse return vk.c.VK_ERROR_INITIALIZATION_FAILED;
     std.debug.print("CreateInstance created {x} instance {x}\n", .{ @intFromPtr(state), @intFromPtr(pInstance.*) });
 
+    // Populate the dispatch table
+    inline for (proc_definitions.InstanceFunctions) |func| {
+        const fn_ptr = next_GetInstanceProcAddr(pInstance.*, func[0]);
+        @field(state.dispatch_table, func[0]) = fn_ptr;
+    }
+
     return vk.c.VK_SUCCESS;
 }
 

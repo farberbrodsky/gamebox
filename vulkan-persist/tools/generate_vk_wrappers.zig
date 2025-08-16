@@ -326,6 +326,7 @@ pub fn main() !void {
         }
     }
     codegen.generateFunctionList(&code_writer, "InstanceFunctions", instance_function_map.items);
+    codegen.generateDispatchTableStruct(&code_writer, "InstanceDispatchTable", instance_function_map.items);
 
     for (parse_state.commands.items) |*command| {
         const wrapper_name = try command.getWrapperName(arena);

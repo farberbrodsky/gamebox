@@ -1,5 +1,6 @@
 const std = @import("std");
 const vk = @import("vk_headers");
+const wrappers = @import("vk_wrappers");
 
 const AnyInstance = ?*opaque {};
 const InstanceTableHeader = struct {
@@ -166,6 +167,7 @@ pub const InstanceState = InstanceTable(vk.Instance, struct {
     nextGetInstanceProcAddr: vk.c.PFN_vkGetInstanceProcAddr = undefined,
 
     // Automatically initialized:
+    dispatch_table: wrappers.InstanceDispatchTable = undefined,
     phys_device_set: std.hash_map.AutoHashMapUnmanaged(vk.c.VkPhysicalDevice, void) = undefined,
     pfnCreateDevice: vk.c.PFN_vkCreateDevice = undefined,
     pfnEnumeratePhysicalDevices: vk.c.PFN_vkEnumeratePhysicalDevices = undefined,
@@ -173,6 +175,7 @@ pub const InstanceState = InstanceTable(vk.Instance, struct {
     const initializer = struct { vk.c.PFN_vkGetInstanceProcAddr };
     pub fn init(self: *Self, i: initializer) bool {
         self.nextGetInstanceProcAddr = i[0];
+        self.dispatch_table = .{};
         self.phys_device_set = @TypeOf(self.phys_device_set).empty;
         self.pfnCreateDevice = @ptrCast(self.get_proc_addr("vkCreateDevice") orelse return false);
         self.pfnEnumeratePhysicalDevices = @ptrCast(self.get_proc_addr("vkEnumeratePhysicalDevices") orelse return false);
