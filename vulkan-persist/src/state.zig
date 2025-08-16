@@ -2,6 +2,8 @@ const std = @import("std");
 const vk = @import("vk_headers");
 
 const AnyInstance = ?*opaque {};
+
+// This is the header for a state object. It is used for both instance and device state objects.
 const InstanceTableHeader = struct {
     const Self = @This();
 
@@ -22,6 +24,7 @@ const InstanceTableHeader = struct {
     }
 };
 
+// This is a generic table for storing state objects. It is used for both instance and device state.
 fn InstanceTable(comptime vk_type: type, comptime EntryStruct: type) type {
     return struct {
         const Entry = EntryStruct;
@@ -158,6 +161,8 @@ fn InstanceTable(comptime vk_type: type, comptime EntryStruct: type) type {
     };
 }
 
+// This is the state object for a Vulkan instance. It stores the dispatch table for the instance,
+// and a set of physical devices that belong to the instance.
 pub const InstanceState = InstanceTable(vk.Instance, struct {
     const Self = @This();
     header: InstanceTableHeader = .{},
@@ -198,6 +203,7 @@ pub const InstanceState = InstanceTable(vk.Instance, struct {
     }
 });
 
+// This is the state object for a Vulkan device. It stores the dispatch table for the device.
 pub const DeviceState = InstanceTable(vk.Device, struct {
     const Self = @This();
     header: InstanceTableHeader = .{},

@@ -4,6 +4,9 @@ const PersistObjectType = enum {
     CreateDevice,
 };
 
+// This struct represents a Vulkan object that can be persisted. It contains a pointer to the
+// underlying object, the object type, and a "creation packet" that contains the information
+// needed to recreate the object.
 const PersistObject = struct {
     const Self = @This();
 
