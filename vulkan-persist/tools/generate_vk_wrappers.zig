@@ -110,7 +110,7 @@ const ParseState = struct {
 
 fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
     // Allocate a command object
-    var parse_command = try state.addCommand();
+    const parse_command = try state.addCommand();
 
     defer {
         // un-add the command if it isn't complete
@@ -190,7 +190,7 @@ pub fn main() !void {
     if (args.len != 3) fatal("wrong number of arguments\n", .{});
 
     const input_file_path = args[1];
-    var input_file = std.fs.cwd().openFile(input_file_path, .{}) catch |err| {
+    const input_file = std.fs.cwd().openFile(input_file_path, .{}) catch |err| {
         fatal("unable to open input '{s}': {s}\n", .{ input_file_path, @errorName(err) });
     };
     defer input_file.close();
@@ -202,7 +202,7 @@ pub fn main() !void {
     defer xml_reader.deinit();
 
     const output_file_path = args[2];
-    var output_file = std.fs.cwd().createFile(output_file_path, .{}) catch |err| {
+    const output_file = std.fs.cwd().createFile(output_file_path, .{}) catch |err| {
         fatal("unable to open output '{s}': {s}\n", .{ output_file_path, @errorName(err) });
     };
     defer output_file.close();
