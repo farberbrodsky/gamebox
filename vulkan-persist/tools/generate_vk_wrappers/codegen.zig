@@ -1,3 +1,3 @@
 pub const CodeWriter = @import("CodeWriter.zig");
-pub const generateFunctionMap = @import("function_map_gen.zig").generateFunctionMap;
+pub const generateFunctionList = @import("function_list_gen.zig").generateFunctionList;
 pub const generateWrapperFunction = @import("wrapper_function_gen.zig").generateWrapperFunction;

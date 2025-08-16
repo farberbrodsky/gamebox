@@ -325,7 +325,7 @@ pub fn main() !void {
             else => {},
         }
     }
-    codegen.generateFunctionMap(&code_writer, "InstanceFunctions", instance_function_map.items);
+    codegen.generateFunctionList(&code_writer, "InstanceFunctions", instance_function_map.items);
 
     for (parse_state.commands.items) |*command| {
         const wrapper_name = try command.getWrapperName(arena);

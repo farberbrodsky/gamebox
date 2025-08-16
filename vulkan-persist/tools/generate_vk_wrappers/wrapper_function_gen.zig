@@ -37,6 +37,8 @@ pub fn generateWrapperFunction(cw: *CodeWriter, wrapper_name: []const u8, comman
     cw.raw("});");
     cw.endLine();
 
+    cw.lineRaw("return 0;");
+
     cw.leaveIndent();
     cw.lineRaw("}");
 }
