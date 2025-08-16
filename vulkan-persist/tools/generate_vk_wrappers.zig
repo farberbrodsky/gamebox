@@ -49,14 +49,46 @@ fn findNextElement(ElementSet: anytype, xml_reader: *xml.Reader, end_element_nam
     };
 }
 
+/// Returns whether the element should be ignored because it's not for the basic "vulkan" api
+fn checkApiAttribute(xml_reader: *xml.Reader) !bool {
+    for (0..xml_reader.attributeCount()) |i| {
+        const attribute_name = xml_reader.attributeName(i);
+        if (std.mem.eql(u8, attribute_name, "api")) {
+            const attribute_value = try xml_reader.attributeValue(i);
+            if (!std.mem.eql(u8, attribute_value, "vulkan")) {
+                // Ignore the element
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 /// Used for:
 /// - Command parameters
 /// - Struct members
 pub const Field = struct {
     type_name: ?[]const u8 = null,
+    field_name: ?[]const u8 = null,
     is_optional1: bool = false,
     is_optional2: bool = false,
     length_annotation: ?[]const u8 = null,
+
+    pub fn isIncomplete(field: Field) bool {
+        if (field.type_name == null) return true;
+        if (field.field_name == null) return true;
+
+        // all good
+        return false;
+    }
+
+    pub fn getFieldName(field: Field) []const u8 {
+        const field_name = field.field_name orelse @panic("must have field name in getFieldName");
+        if (std.mem.eql(u8, field_name, "type")) {
+            return "@\"type\"";
+        }
+        return field_name;
+    }
 };
 
 /// Each <command> XML tag is parsed into this object
@@ -83,6 +115,19 @@ pub const Command = struct {
             }
         }
         try writer.print(")", .{});
+    }
+
+    pub fn isIncomplete(command: Command) bool {
+        if (command.name == null) return true;
+        if (command.params == null) return true;
+        for (command.params.?) |param| {
+            if (param.isIncomplete()) {
+                return true;
+            }
+        }
+
+        // all good
+        return false;
     }
 };
 
@@ -114,26 +159,21 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
 
     defer {
         // un-add the command if it isn't complete
-        if (parse_command.name == null) {
+        if (parse_command.isIncomplete()) {
             state.unaddCommand();
         }
     }
 
-    for (0..xml_reader.attributeCount()) |i| {
-        const attribute_name = xml_reader.attributeName(i);
-        if (std.mem.eql(u8, attribute_name, "api")) {
-            const attribute_value = try xml_reader.attributeValue(i);
-            if (!std.mem.eql(u8, attribute_value, "vulkan")) {
-                // Ignore the element
-                while (try readInsideElement(xml_reader, "command") != null) {}
-                return;
-            }
-        }
+    if (!try checkApiAttribute(xml_reader)) {
+        // Ignore the element
+        while (try readInsideElement(xml_reader, "command") != null) {}
+        return;
     }
 
     const ChildTags = enum {
         proto,
         param,
+        implicitexternsyncparams,
     };
     var params = std.ArrayList(Field).init(state.arena);
     defer params.deinit();
@@ -161,14 +201,28 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
                 name,
             };
             var param = Field{};
+
+            if (!try checkApiAttribute(xml_reader)) {
+                // Ignore the element
+                while (try readInsideElement(xml_reader, "param") != null) {}
+                break;
+            }
+
             while (try findNextElement(ParamChildTags, xml_reader, "param")) |param_child_node| switch (param_child_node) {
                 .type => {
                     std.debug.print("Found param's type\n", .{});
                     param.type_name = try xml_reader.readElementTextAlloc(state.arena);
                 },
-                .name => {},
+                .name => {
+                    std.debug.print("Found param's name\n", .{});
+                    param.field_name = try xml_reader.readElementTextAlloc(state.arena);
+                },
             };
             try params.append(param);
+        },
+        .implicitexternsyncparams => {
+            // skip contents
+            while (try readInsideElement(xml_reader, "implicitexternsyncparams") != null) {}
         },
     };
 
@@ -239,7 +293,7 @@ pub fn main() !void {
 
     for (parse_state.commands.items, command_function_map) |command, command_names| {
         const wrapper_name = command_names[1];
-        codegen.generateWrapperFunction(&code_writer, wrapper_name, &command);
+        try codegen.generateWrapperFunction(&code_writer, wrapper_name, &command);
     }
 
     if (code_writer.err) |e| return e;
