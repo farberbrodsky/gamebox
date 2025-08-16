@@ -95,6 +95,8 @@ pub const Field = struct {
 pub const Command = struct {
     return_type_name: ?[]const u8 = null,
     name: ?[]const u8 = null,
+    /// Defaults to {name}_wrapper. Otherwise, may be set manually. Access using getWrapperName() - a lazy generator.
+    wrapper_name: ?[]const u8 = null,
     params: ?[]Field = null,
 
     pub fn init() Command {
@@ -128,6 +130,35 @@ pub const Command = struct {
 
         // all good
         return false;
+    }
+
+    const CommandType = enum { Other, Instance, Device };
+
+    pub fn classify(command: Command) CommandType {
+        if (command.params) |command_params| {
+            if (command_params.len > 0) {
+                const first_param = command_params[0];
+                if (first_param.type_name) |type_name| {
+                    if (std.mem.eql(u8, type_name, "VkInstance")) {
+                        return .Instance;
+                    }
+                    if (std.mem.eql(u8, type_name, "VkDevice")) {
+                        return .Device;
+                    }
+                }
+            }
+        }
+        return .Other;
+    }
+
+    pub fn getWrapperName(self: *Command, alloc: std.mem.Allocator) ![]const u8 {
+        if (self.wrapper_name) |name| {
+            return name;
+        }
+        const name = self.name orelse return error.UnnamedCommand;
+        const generated_name = try std.fmt.allocPrint(alloc, "{s}_wrapper", .{name});
+        self.wrapper_name = generated_name;
+        return generated_name;
     }
 };
 
@@ -283,17 +314,22 @@ pub fn main() !void {
     code_writer.line("const std = @import(\"std\");", .{});
     code_writer.line("const vk = @import(\"vk_headers\");", .{});
 
-    const command_function_map = try arena.alloc(struct { []const u8, []const u8 }, parse_state.commands.items.len);
-    for (0.., parse_state.commands.items) |i, command| {
-        const name = command.name orelse return error.UnnamedCommand;
-        const wrapper_name = try std.fmt.allocPrint(arena, "{s}_wrapper", .{name});
-        command_function_map[i] = .{ name, wrapper_name };
+    var instance_function_map = try std.ArrayListUnmanaged(struct { []const u8, []const u8 }).initCapacity(arena, parse_state.commands.items.len);
+    for (parse_state.commands.items) |*command| {
+        switch (command.classify()) {
+            .Instance => {
+                const name = command.name orelse return error.UnnamedCommand;
+                const wrapper_name = try command.getWrapperName(arena);
+                instance_function_map.appendAssumeCapacity(.{ name, wrapper_name });
+            },
+            else => {},
+        }
     }
-    codegen.generateFunctionMap(&code_writer, "InstanceFunctions", command_function_map);
+    codegen.generateFunctionMap(&code_writer, "InstanceFunctions", instance_function_map.items);
 
-    for (parse_state.commands.items, command_function_map) |command, command_names| {
-        const wrapper_name = command_names[1];
-        try codegen.generateWrapperFunction(&code_writer, wrapper_name, &command);
+    for (parse_state.commands.items) |*command| {
+        const wrapper_name = try command.getWrapperName(arena);
+        try codegen.generateWrapperFunction(&code_writer, wrapper_name, command);
     }
 
     if (code_writer.err) |e| return e;

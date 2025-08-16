@@ -7,7 +7,7 @@ pub fn generateFunctionMap(cw: *CodeWriter, const_name: []const u8, function_nam
     defer cw.leaveContextComment("generateFunctionMap");
 
     cw.startLine();
-    cw.print("const {s} = ", .{const_name});
+    cw.print("pub const {s} = ", .{const_name});
     cw.raw("std.StaticStringMap(vk.c.PFN_vkVoidFunction).initComptime([_]struct { []const u8, vk.c.PFN_vkVoidFunction } {");
     cw.endLine();
     cw.enterIndent();
