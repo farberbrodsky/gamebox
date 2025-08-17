@@ -313,6 +313,7 @@ pub fn main() !void {
 
     code_writer.line("const std = @import(\"std\");", .{});
     code_writer.line("const vk = @import(\"vk_headers\");", .{});
+    code_writer.line("const findInstance = @import(\"so\").findInstance;", .{});
 
     var instance_function_map = try std.ArrayListUnmanaged(struct { []const u8, []const u8 }).initCapacity(arena, parse_state.commands.items.len);
     for (parse_state.commands.items) |*command| {
@@ -320,17 +321,14 @@ pub fn main() !void {
             .Instance => {
                 const name = command.name orelse return error.UnnamedCommand;
                 const wrapper_name = try command.getWrapperName(arena);
+                try codegen.generateWrapperFunction(&code_writer, wrapper_name, command);
                 instance_function_map.appendAssumeCapacity(.{ name, wrapper_name });
             },
             else => {},
         }
     }
     codegen.generateFunctionList(&code_writer, "InstanceFunctions", instance_function_map.items);
-
-    for (parse_state.commands.items) |*command| {
-        const wrapper_name = try command.getWrapperName(arena);
-        try codegen.generateWrapperFunction(&code_writer, wrapper_name, command);
-    }
+    codegen.generateDispatchTableStruct(&code_writer, "InstanceDispatchTable", instance_function_map.items);
 
     if (code_writer.err) |e| return e;
     return std.process.cleanExit();

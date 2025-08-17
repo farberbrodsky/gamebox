@@ -3,9 +3,15 @@ const testing = std.testing;
 const vk = @import("vk_headers");
 const State = @import("state.zig");
 const proc_definitions = @import("proc_definitions.zig");
+const wrappers = @import("vk_wrappers");
 
 var instance_table: State.InstanceState = .{};
 var device_table: State.DeviceState = .{};
+
+pub fn findInstance(instance: vk.Instance) ?*State.InstanceState.Entry {
+    if (instance == null) return null;
+    return instance_table.find(instance);
+}
 
 pub export fn VK_LAYER_GAMEBOX_persist_CreateInstance(pCreateInfo: *const vk.c.VkInstanceCreateInfo, pAllocator: ?*const vk.c.VkAllocationCallbacks, pInstance: *vk.Instance) callconv(.c) vk.c.VkResult {
     std.debug.print("CreateInstance\n", .{});
@@ -32,6 +38,12 @@ pub export fn VK_LAYER_GAMEBOX_persist_CreateInstance(pCreateInfo: *const vk.c.V
         next_GetInstanceProcAddr,
     }) orelse return vk.c.VK_ERROR_INITIALIZATION_FAILED;
     std.debug.print("CreateInstance created {x} instance {x}\n", .{ @intFromPtr(state), @intFromPtr(pInstance.*) });
+
+    // Populate the dispatch table
+    inline for (std.meta.fields(wrappers.InstanceDispatchTable)) |field| {
+        const fn_ptr = next_GetInstanceProcAddr(pInstance.*, field.name);
+        @field(state.dispatch_table, field.name) = fn_ptr;
+    }
 
     return vk.c.VK_SUCCESS;
 }
@@ -70,7 +82,6 @@ pub fn EnumeratePhysicalDevices(instance: vk.Instance, pPhysicalDeviceCount: *u3
         return next_result;
 
     // For successful or incomplete results:
-    std.debug.print("ABC: instance={x}, {x}, {x}\n", .{ @intFromPtr(instance), @intFromPtr(pPhysicalDevices), pPhysicalDeviceCount.* });
     if (pPhysicalDevices) |phys_dev_arr| {
         // Map physical devices to our own
         for (phys_dev_arr[0..pPhysicalDeviceCount.*]) |phys_dev| {
@@ -79,7 +90,6 @@ pub fn EnumeratePhysicalDevices(instance: vk.Instance, pPhysicalDeviceCount: *u3
             };
         }
     }
-    std.debug.print("ABC!\n", .{});
     return next_result;
 }
 
