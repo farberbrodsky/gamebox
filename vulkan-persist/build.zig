@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
     });
 
     vkwrappers_mod.addImport("vk_headers", vkheaders_mod);
+    // TODO: This should NOT be necessary in the long term.
     vkwrappers_mod.addImport("so", so_mod);
     so_mod.addImport("vk_headers", vkheaders_mod);
     so_mod.addImport("vk_wrappers", vkwrappers_mod);

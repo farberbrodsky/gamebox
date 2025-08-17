@@ -235,18 +235,19 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
 
             if (!try checkApiAttribute(xml_reader)) {
                 // Ignore the element
+                std.debug.print("Ignoring param due to api\n", .{});
                 while (try readInsideElement(xml_reader, "param") != null) {}
-                break;
+                continue;
             }
 
             while (try findNextElement(ParamChildTags, xml_reader, "param")) |param_child_node| switch (param_child_node) {
                 .type => {
-                    std.debug.print("Found param's type\n", .{});
                     param.type_name = try xml_reader.readElementTextAlloc(state.arena);
+                    std.debug.print("Found param's type {s}\n", .{param.type_name.?});
                 },
                 .name => {
-                    std.debug.print("Found param's name\n", .{});
                     param.field_name = try xml_reader.readElementTextAlloc(state.arena);
+                    std.debug.print("Found param's name {s}\n", .{param.field_name.?});
                 },
             };
             try params.append(param);
@@ -314,8 +315,11 @@ pub fn main() !void {
     code_writer.line("const std = @import(\"std\");", .{});
     code_writer.line("const vk = @import(\"vk_headers\");", .{});
     code_writer.line("const findInstance = @import(\"so\").findInstance;", .{});
+    code_writer.line("const findDevice = @import(\"so\").findDevice;", .{});
 
     var instance_function_map = try std.ArrayListUnmanaged(struct { []const u8, []const u8 }).initCapacity(arena, parse_state.commands.items.len);
+    var device_function_map = try std.ArrayListUnmanaged(struct { []const u8, []const u8 }).initCapacity(arena, parse_state.commands.items.len);
+
     for (parse_state.commands.items) |*command| {
         switch (command.classify()) {
             .Instance => {
@@ -324,11 +328,19 @@ pub fn main() !void {
                 try codegen.generateWrapperFunction(&code_writer, wrapper_name, command);
                 instance_function_map.appendAssumeCapacity(.{ name, wrapper_name });
             },
+            .Device => {
+                const name = command.name orelse return error.UnnamedCommand;
+                const wrapper_name = try command.getWrapperName(arena);
+                try codegen.generateWrapperFunction(&code_writer, wrapper_name, command);
+                device_function_map.appendAssumeCapacity(.{ name, wrapper_name });
+            },
             else => {},
         }
     }
     codegen.generateFunctionList(&code_writer, "InstanceFunctions", instance_function_map.items);
     codegen.generateDispatchTableStruct(&code_writer, "InstanceDispatchTable", instance_function_map.items);
+    codegen.generateFunctionList(&code_writer, "DeviceFunctions", device_function_map.items);
+    codegen.generateDispatchTableStruct(&code_writer, "DeviceDispatchTable", device_function_map.items);
 
     if (code_writer.err) |e| return e;
     return std.process.cleanExit();

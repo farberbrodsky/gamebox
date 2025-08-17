@@ -132,27 +132,26 @@ fn InstanceTable(comptime vk_type: type, comptime EntryStruct: type) type {
                 return;
             } else {
                 // Find the state object before the one we are removing
-                var link: ?*Entry = self.head;
-                var next: ?*Entry = undefined;
-                while (link) {
-                    next = link.header.next.load(.unordered);
-                    if (next.header.instance == @as(AnyInstance, @ptrCast(instance)))
-                        break;
+                // Next is the object we are removing
+                var link: *InstanceTableHeader = &self.head.header;
+                const next = while (link.next.load(.unordered)) |next| {
+                    if (next.instance == @as(AnyInstance, @ptrCast(instance)))
+                        break next;
                     link = next;
-                }
+                } else null;
 
-                if (link == null) {
+                if (next) |destroyed_header| {
+                    // Destroy and unlink the destroyed entry
+                    const destroyed: *Entry = @fieldParentPtr("header", destroyed_header);
+                    destroyed.deinit();
+                    link.next.store(destroyed_header.next.load(.unordered), .release);
+                    // Destroy it with its own allocator
+                    const alloc = destroyed_header.alloc();
+                    alloc.destroy(destroyed);
+                } else {
                     // instance should be known to us
                     std.debug.panic("Instance being destroyed does not appear in any records\n", .{});
                     return;
-                } else |prev| {
-                    // Destroy and unlink the destroyed entry
-                    const destroyed = next.?;
-                    destroyed.deinit();
-                    prev.header.next.store(destroyed.header.next.load(.unordered), .release);
-                    // Destroy it with its own allocator
-                    const alloc = destroyed.header.alloc();
-                    alloc.destroy(destroyed);
                 }
             }
         }
@@ -169,25 +168,21 @@ pub const InstanceState = InstanceTable(vk.Instance, struct {
     // Automatically initialized:
     dispatch_table: wrappers.InstanceDispatchTable = undefined,
     phys_device_set: std.hash_map.AutoHashMapUnmanaged(vk.c.VkPhysicalDevice, void) = undefined,
-    pfnCreateDevice: vk.c.PFN_vkCreateDevice = undefined,
-    pfnEnumeratePhysicalDevices: vk.c.PFN_vkEnumeratePhysicalDevices = undefined,
 
     const initializer = struct { vk.c.PFN_vkGetInstanceProcAddr };
     pub fn init(self: *Self, i: initializer) bool {
         self.nextGetInstanceProcAddr = i[0];
         self.dispatch_table = .{};
-        self.phys_device_set = @TypeOf(self.phys_device_set).empty;
-        self.pfnCreateDevice = @ptrCast(self.get_proc_addr("vkCreateDevice") orelse return false);
-        self.pfnEnumeratePhysicalDevices = @ptrCast(self.get_proc_addr("vkEnumeratePhysicalDevices") orelse return false);
+        self.phys_device_set = .empty;
         return true;
     }
 
     pub fn deinit(self: *Self) void {
-        self.phys_device_set.deinit(self.header.allocator.allocator());
+        self.phys_device_set.deinit(self.header.alloc());
     }
 
     /// Can be called in init() but only after initializing nextGetInstanceProcAddr.
-    fn get_proc_addr(self: *Self, fn_name: [*:0]const u8) ?vk.c.PFN_vkVoidFunction {
+    pub fn get_proc_addr(self: *Self, fn_name: [*:0]const u8) ?vk.c.PFN_vkVoidFunction {
         return self.nextGetInstanceProcAddr.?(@ptrCast(self.header.instance), fn_name);
     }
 
@@ -209,12 +204,13 @@ pub const DeviceState = InstanceTable(vk.Device, struct {
     pfnGetDeviceProcAddr: vk.c.PFN_vkGetDeviceProcAddr = undefined,
 
     // Automatically initialized:
-    // ...
+    dispatch_table: wrappers.DeviceDispatchTable = undefined,
 
     const initializer = struct { *InstanceState.Entry, vk.c.PFN_vkGetDeviceProcAddr };
     pub fn init(self: *Self, i: initializer) bool {
         self.parent_state = i[0];
         self.pfnGetDeviceProcAddr = i[1];
+        self.dispatch_table = .{};
         return true;
     }
 

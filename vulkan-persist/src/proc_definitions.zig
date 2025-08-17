@@ -36,4 +36,4 @@ pub const InstanceFunctions = overrideStaticMap(&[_]FunctionPair{
     .{ "vkEnumeratePhysicalDevices", @ptrCast(&so.EnumeratePhysicalDevices) },
 }, &wrappers.InstanceFunctions);
 
-pub const DeviceFunctions = std.StaticStringMap(vk.c.PFN_vkVoidFunction).initComptime([_]FunctionPair{});
+pub const DeviceFunctions = overrideStaticMap(&[_]FunctionPair{}, &wrappers.DeviceFunctions);

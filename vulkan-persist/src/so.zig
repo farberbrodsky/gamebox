@@ -13,6 +13,11 @@ pub fn findInstance(instance: vk.Instance) ?*State.InstanceState.Entry {
     return instance_table.find(instance);
 }
 
+pub fn findDevice(device: vk.Device) ?*State.DeviceState.Entry {
+    if (device == null) return null;
+    return device_table.find(device);
+}
+
 pub export fn VK_LAYER_GAMEBOX_persist_CreateInstance(pCreateInfo: *const vk.c.VkInstanceCreateInfo, pAllocator: ?*const vk.c.VkAllocationCallbacks, pInstance: *vk.Instance) callconv(.c) vk.c.VkResult {
     std.debug.print("CreateInstance\n", .{});
     // Find the VkLayerInstanceCreateInfo/VkLayerDeviceCreateInfo structure in the VkInstanceCreateInfo/VkDeviceCreateInfo structure.
@@ -45,6 +50,13 @@ pub export fn VK_LAYER_GAMEBOX_persist_CreateInstance(pCreateInfo: *const vk.c.V
         @field(state.dispatch_table, field.name) = fn_ptr;
     }
 
+    // Check for necessary functions
+    if (state.dispatch_table.vkEnumeratePhysicalDevices == null) {
+        std.debug.print("Not even the basics right...\n", .{});
+        instance_table.destroy(pInstance.*);
+        return vk.c.VK_ERROR_INITIALIZATION_FAILED;
+    }
+
     return vk.c.VK_SUCCESS;
 }
 
@@ -55,16 +67,18 @@ pub export fn VK_LAYER_GAMEBOX_persist_GetInstanceProcAddr(instance: vk.Instance
     if (instance == null)
         return null;
 
-    // intercept core commands
     if (proc_definitions.InstanceFunctions.get(std.mem.span(name.?))) |proc| {
+        // TODO: return null if underlying impl is also null and command isn't vkCreateInstance! This requires a small rearchitecture.
         return proc;
     } else {
+        // Other command
+        std.debug.print("UNRECOGNIZED GetInstanceProcAddr: {s}.\n", .{name.?});
+
         const state = instance_table.find(instance) orelse {
             std.debug.print("Instance is not recognized.\n", .{});
             return null;
         };
 
-        // Other command
         return state.nextGetInstanceProcAddr.?(instance, name);
     }
 }
@@ -77,7 +91,9 @@ pub fn EnumeratePhysicalDevices(instance: vk.Instance, pPhysicalDeviceCount: *u3
         return vk.c.VK_ERROR_UNKNOWN;
     };
 
-    const next_result = state.pfnEnumeratePhysicalDevices.?(instance, pPhysicalDeviceCount, pPhysicalDevices);
+    // checked not to be null by CreateInstance
+    const enumerate_fn = @as(vk.c.PFN_vkEnumeratePhysicalDevices, @ptrCast(state.dispatch_table.vkEnumeratePhysicalDevices.?)).?;
+    const next_result = enumerate_fn(instance, pPhysicalDeviceCount, pPhysicalDevices);
     if (next_result != vk.c.VK_SUCCESS and next_result != vk.c.VK_INCOMPLETE)
         return next_result;
 
@@ -110,11 +126,11 @@ pub export fn VK_LAYER_GAMEBOX_persist_CreateDevice(gpu: vk.c.VkPhysicalDevice, 
     const layer_info: *vk.c.VkLayerDeviceLink = chain_info.u.pLayerInfo orelse return vk.c.VK_ERROR_INITIALIZATION_FAILED;
 
     // Get the next entity's vkGet*ProcAddr from the "pLayerInfo" field.
-    const next_GetInstanceProcAddr = layer_info.pfnNextGetInstanceProcAddr orelse return vk.c.VK_ERROR_INITIALIZATION_FAILED;
     const next_GetDeviceProcAddr = layer_info.pfnNextGetDeviceProcAddr orelse return vk.c.VK_ERROR_INITIALIZATION_FAILED;
 
-    // For CreateDevice get the next entity's vkCreateDevice by calling the "pfnNextGetInstanceProcAddr": pfnNextGetInstanceProcAddr(instance, "vkCreateDevice"), passing the already created instance handle.
-    const next_CreateDevice: vk.c.PFN_vkCreateDevice = @ptrCast(next_GetInstanceProcAddr(@ptrCast(parent_state.header.instance), "vkCreateDevice") orelse return vk.c.VK_ERROR_INITIALIZATION_FAILED);
+    // For CreateDevice get the next entity's vkCreateDevice
+    // TODO: add this in particular to the instance dispatch table
+    const next_CreateDevice: vk.c.PFN_vkCreateDevice = @ptrCast(parent_state.get_proc_addr("vkCreateDevice") orelse return vk.c.VK_ERROR_INITIALIZATION_FAILED);
 
     // Advance the linked list to the next node: pLayerInfo = pLayerInfo->pNext.
     chain_info.u.pLayerInfo = layer_info.pNext;
@@ -128,6 +144,12 @@ pub export fn VK_LAYER_GAMEBOX_persist_CreateDevice(gpu: vk.c.VkPhysicalDevice, 
     // ...!!!
     const state = device_table.append(pDevice.*, @ptrCast(pAllocator), .{ parent_state, next_GetDeviceProcAddr }) orelse return vk.c.VK_ERROR_INITIALIZATION_FAILED;
     std.debug.print("CreateDevice created {x} device {x}\n", .{ @intFromPtr(state), @intFromPtr(pDevice.*) });
+
+    // Populate the device's dispatch table
+    inline for (std.meta.fields(wrappers.DeviceDispatchTable)) |field| {
+        const fn_ptr = next_GetDeviceProcAddr(pDevice.*, field.name);
+        @field(state.dispatch_table, field.name) = fn_ptr;
+    }
 
     return vk.c.VK_SUCCESS;
 }
@@ -144,7 +166,12 @@ pub export fn VK_LAYER_GAMEBOX_persist_GetDeviceProcAddr(device: vk.Device, name
         return null;
     };
 
-    // TODO: use proc_definitions.DeviceFunctions
-
-    return state.pfnGetDeviceProcAddr.?(device, name);
+    if (proc_definitions.DeviceFunctions.get(std.mem.span(name.?))) |proc| {
+        // TODO: return null if underlying impl is also null! This requires a small rearchitecture.
+        return proc;
+    } else {
+        // Other command
+        std.debug.print("UNRECOGNIZED GetDeviceProcAddr: {s}.\n", .{name.?});
+        return state.pfnGetDeviceProcAddr.?(device, name);
+    }
 }

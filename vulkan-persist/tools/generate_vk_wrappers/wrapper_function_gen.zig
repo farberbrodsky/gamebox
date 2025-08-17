@@ -84,6 +84,48 @@ pub fn generateWrapperFunction(cw: *CodeWriter, wrapper_name: []const u8, comman
             cw.raw(");");
             cw.endLine();
         },
+        .Device => {
+            const command_params = command.params orelse return error.MissingParams;
+            if (command_params.len == 0) return error.MissingParams;
+            const device_param_name = command_params[0].getFieldName();
+
+            cw.line("const state = findDevice(@ptrFromInt({s})) orelse {{", .{device_param_name});
+            cw.enterIndent();
+            cw.line("std.debug.print(\"Could not find state for device {{x}}\\n\", .{{{s}}});", .{device_param_name});
+            cw.lineRaw("return vk.c.VK_ERROR_UNKNOWN;");
+            cw.leaveIndent();
+            cw.lineRaw("};");
+
+            cw.line("const pfn = state.dispatch_table.{s};", .{command_name});
+            cw.lineRaw("if (pfn == null) {");
+            cw.enterIndent();
+            cw.line("std.debug.print(\"Function {s} not found in device dispatch table\\n\", .{{}});", .{command_name});
+            cw.lineRaw("return vk.c.VK_ERROR_UNKNOWN;");
+            cw.leaveIndent();
+            cw.lineRaw("}");
+
+            cw.startLine();
+            cw.print("const typed_pfn: *const fn(", .{});
+            for (0.., command_params) |i, _| {
+                if (i != 0) {
+                    cw.raw(", ");
+                }
+                cw.raw("usize");
+            }
+            cw.raw(") callconv(.C) isize = @ptrCast(pfn.?);");
+            cw.endLine();
+
+            cw.startLine();
+            cw.print("return typed_pfn(", .{});
+            for (0.., command_params) |i, param| {
+                if (i != 0) {
+                    cw.raw(", ");
+                }
+                cw.print("{s}", .{param.getFieldName()});
+            }
+            cw.raw(");");
+            cw.endLine();
+        },
         else => {
             // Default code gen: just return 0
             cw.lineRaw("return 0;");
