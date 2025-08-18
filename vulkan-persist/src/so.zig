@@ -47,7 +47,7 @@ pub export fn VK_LAYER_GAMEBOX_persist_CreateInstance(pCreateInfo: *const vk.c.V
     // Populate the dispatch table
     inline for (std.meta.fields(wrappers.InstanceDispatchTable)) |field| {
         const fn_ptr = next_GetInstanceProcAddr(pInstance.*, field.name);
-        @field(state.dispatch_table, field.name) = fn_ptr;
+        @field(state.dispatch_table, field.name) = @ptrCast(fn_ptr);
     }
 
     // Check for necessary functions
@@ -83,7 +83,7 @@ pub export fn VK_LAYER_GAMEBOX_persist_GetInstanceProcAddr(instance: vk.Instance
     }
 }
 
-pub fn EnumeratePhysicalDevices(instance: vk.Instance, pPhysicalDeviceCount: *u32, pPhysicalDevices: ?[*]vk.c.VkPhysicalDevice) callconv(.c) vk.c.VkResult {
+pub fn EnumeratePhysicalDevices(instance: vk.Instance, pPhysicalDeviceCount: *u32, pPhysicalDevices: ?[*]vk.c.VkPhysicalDevice) callconv(.c) isize {
     if (instance == null)
         return vk.c.VK_ERROR_UNKNOWN;
     const state = instance_table.find(instance) orelse {
@@ -92,8 +92,7 @@ pub fn EnumeratePhysicalDevices(instance: vk.Instance, pPhysicalDeviceCount: *u3
     };
 
     // checked not to be null by CreateInstance
-    const enumerate_fn = @as(vk.c.PFN_vkEnumeratePhysicalDevices, @ptrCast(state.dispatch_table.vkEnumeratePhysicalDevices.?)).?;
-    const next_result = enumerate_fn(instance, pPhysicalDeviceCount, pPhysicalDevices);
+    const next_result = state.dispatch_table.vkEnumeratePhysicalDevices.?(@intFromPtr(instance), @intFromPtr(pPhysicalDeviceCount), @intFromPtr(pPhysicalDevices));
     if (next_result != vk.c.VK_SUCCESS and next_result != vk.c.VK_INCOMPLETE)
         return next_result;
 
@@ -148,7 +147,7 @@ pub export fn VK_LAYER_GAMEBOX_persist_CreateDevice(gpu: vk.c.VkPhysicalDevice, 
     // Populate the device's dispatch table
     inline for (std.meta.fields(wrappers.DeviceDispatchTable)) |field| {
         const fn_ptr = next_GetDeviceProcAddr(pDevice.*, field.name);
-        @field(state.dispatch_table, field.name) = fn_ptr;
+        @field(state.dispatch_table, field.name) = @ptrCast(fn_ptr);
     }
 
     return vk.c.VK_SUCCESS;

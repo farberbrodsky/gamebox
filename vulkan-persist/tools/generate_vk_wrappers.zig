@@ -97,6 +97,8 @@ pub const Command = struct {
     name: ?[]const u8 = null,
     /// Defaults to {name}_wrapper. Otherwise, may be set manually. Access using getWrapperName() - a lazy generator.
     wrapper_name: ?[]const u8 = null,
+    /// Access using getFunctionType() - a lazy generator.
+    function_type: ?[]const u8 = null,
     params: ?[]Field = null,
 
     pub fn init() Command {
@@ -159,6 +161,26 @@ pub const Command = struct {
         const generated_name = try std.fmt.allocPrint(alloc, "{s}_wrapper", .{name});
         self.wrapper_name = generated_name;
         return generated_name;
+    }
+
+    /// Generates a string like: `*const fn(usize, usize ...) isize`. And caches it in a field.
+    pub fn getFunctionType(self: *Command, alloc: std.mem.Allocator) ![]const u8 {
+        if (self.function_type) |function_type| {
+            return function_type;
+        }
+        var array_list = std.ArrayList(u8).init(alloc);
+        const writer = array_list.writer();
+        try writer.writeAll("*const fn(");
+        if (self.params) |command_params| for (0.., command_params) |i, _| {
+            if (i != 0) {
+                try writer.writeAll(", ");
+            }
+            try writer.writeAll("usize");
+        };
+        try writer.writeAll(") callconv(.C) isize");
+        const generated_function_type = try array_list.toOwnedSlice();
+        self.function_type = generated_function_type;
+        return generated_function_type;
     }
 };
 
@@ -317,22 +339,24 @@ pub fn main() !void {
     code_writer.line("const findInstance = @import(\"so\").findInstance;", .{});
     code_writer.line("const findDevice = @import(\"so\").findDevice;", .{});
 
-    var instance_function_map = try std.ArrayListUnmanaged(struct { []const u8, []const u8 }).initCapacity(arena, parse_state.commands.items.len);
-    var device_function_map = try std.ArrayListUnmanaged(struct { []const u8, []const u8 }).initCapacity(arena, parse_state.commands.items.len);
+    var instance_function_map = try std.ArrayListUnmanaged(codegen.FunctionListEntry).initCapacity(arena, parse_state.commands.items.len);
+    var device_function_map = try std.ArrayListUnmanaged(codegen.FunctionListEntry).initCapacity(arena, parse_state.commands.items.len);
 
     for (parse_state.commands.items) |*command| {
         switch (command.classify()) {
             .Instance => {
                 const name = command.name orelse return error.UnnamedCommand;
                 const wrapper_name = try command.getWrapperName(arena);
+                const function_type = try command.getFunctionType(arena);
                 try codegen.generateWrapperFunction(&code_writer, wrapper_name, command);
-                instance_function_map.appendAssumeCapacity(.{ name, wrapper_name });
+                instance_function_map.appendAssumeCapacity(.{ .command_name = name, .wrapper_name = wrapper_name, .function_type = function_type });
             },
             .Device => {
                 const name = command.name orelse return error.UnnamedCommand;
                 const wrapper_name = try command.getWrapperName(arena);
+                const function_type = try command.getFunctionType(arena);
                 try codegen.generateWrapperFunction(&code_writer, wrapper_name, command);
-                device_function_map.appendAssumeCapacity(.{ name, wrapper_name });
+                device_function_map.appendAssumeCapacity(.{ .command_name = name, .wrapper_name = wrapper_name, .function_type = function_type });
             },
             else => {},
         }

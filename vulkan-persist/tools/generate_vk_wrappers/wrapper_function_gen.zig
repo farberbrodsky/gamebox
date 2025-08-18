@@ -63,18 +63,7 @@ pub fn generateWrapperFunction(cw: *CodeWriter, wrapper_name: []const u8, comman
             cw.lineRaw("}");
 
             cw.startLine();
-            cw.print("const typed_pfn: *const fn(", .{});
-            for (0.., command_params) |i, _| {
-                if (i != 0) {
-                    cw.raw(", ");
-                }
-                cw.raw("usize");
-            }
-            cw.raw(") callconv(.C) isize = @ptrCast(pfn.?);");
-            cw.endLine();
-
-            cw.startLine();
-            cw.print("return typed_pfn(", .{});
+            cw.print("return pfn.?(", .{});
             for (0.., command_params) |i, param| {
                 if (i != 0) {
                     cw.raw(", ");
@@ -105,18 +94,7 @@ pub fn generateWrapperFunction(cw: *CodeWriter, wrapper_name: []const u8, comman
             cw.lineRaw("}");
 
             cw.startLine();
-            cw.print("const typed_pfn: *const fn(", .{});
-            for (0.., command_params) |i, _| {
-                if (i != 0) {
-                    cw.raw(", ");
-                }
-                cw.raw("usize");
-            }
-            cw.raw(") callconv(.C) isize = @ptrCast(pfn.?);");
-            cw.endLine();
-
-            cw.startLine();
-            cw.print("return typed_pfn(", .{});
+            cw.print("return pfn.?(", .{});
             for (0.., command_params) |i, param| {
                 if (i != 0) {
                     cw.raw(", ");
