@@ -75,7 +75,7 @@ pub fn setupMounts(allocator: std.mem.Allocator) !void {
     // Mount an overlayfs instead of the image.
     // Even if we didn't do this, the new root path has to be a different mount point for pivot_root to work!
     const overlay_params = .{ image_path, overlay_upper, overlay_work };
-    const overlay_params_str = try std.fmt.allocPrintZ(allocator, "lowerdir={s},upperdir={s},workdir={s}", overlay_params);
+    const overlay_params_str = try std.fmt.allocPrintSentinel(allocator, "lowerdir={s},upperdir={s},workdir={s}", overlay_params, 0);
     defer allocator.free(overlay_params_str);
     ns_log.debug("Overlaying filesystem with parameters {s}", .{overlay_params_str});
     binux.mount("overlay", image_path, "overlay", 0, @intFromPtr(@as([*:0]const u8, overlay_params_str))) catch |err| switch (err) {

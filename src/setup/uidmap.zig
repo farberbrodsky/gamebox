@@ -103,12 +103,12 @@ fn prepareApplyUidmaps(parent_allocator: std.mem.Allocator, pid: posix.pid_t, ra
     const argv = try allocator.alloc(?[*:0]const u8, 3 + 3 * ranges.len);
 
     argv[0] = exec;
-    argv[1] = try std.fmt.allocPrintZ(allocator, "{d}", .{pid});
+    argv[1] = try std.fmt.allocPrintSentinel(allocator, "{d}", .{pid}, 0);
     for (0.., ranges) |i, range| {
         uidmap_log.debug("{s} parameters: inner {d} outer {d} count {d}", .{ exec, range.inner_id, range.outer_id, range.count });
-        argv[2 + 3 * i + 0] = try std.fmt.allocPrintZ(allocator, "{d}", .{range.inner_id});
-        argv[2 + 3 * i + 1] = try std.fmt.allocPrintZ(allocator, "{d}", .{range.outer_id});
-        argv[2 + 3 * i + 2] = try std.fmt.allocPrintZ(allocator, "{d}", .{range.count});
+        argv[2 + 3 * i + 0] = try std.fmt.allocPrintSentinel(allocator, "{d}", .{range.inner_id}, 0);
+        argv[2 + 3 * i + 1] = try std.fmt.allocPrintSentinel(allocator, "{d}", .{range.outer_id}, 0);
+        argv[2 + 3 * i + 2] = try std.fmt.allocPrintSentinel(allocator, "{d}", .{range.count}, 0);
     }
     argv[2 + 3 * ranges.len] = null;
 

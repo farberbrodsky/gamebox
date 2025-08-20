@@ -36,7 +36,9 @@ pub fn init(allocator: std.mem.Allocator) !void {
         std.debug.print("Then, tar -xvf to your alpine image or whatever.\n", .{});
         return error.LoserError;
     } else {
-        var token_reader = std.json.reader(allocator, file.reader());
+        var read_buffer: [4096]u8 = undefined;
+        var file_reader = file.reader(&read_buffer);
+        var token_reader = std.json.Reader.init(allocator, &file_reader.interface);
         parsed_configuration = try std.json.parseFromTokenSource(Config, allocator, &token_reader, .{});
     }
 }

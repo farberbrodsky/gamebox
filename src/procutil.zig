@@ -65,7 +65,7 @@ pub const FlagEventfd = struct {
 
 var g_echild_event_fd: ?*FlagEventfd = null;
 
-fn sigchld_handler(_: i32) callconv(.C) void {
+fn sigchld_handler(_: i32) callconv(.c) void {
     while (true) {
         var wstatus: u32 = undefined;
         const rc: isize = @bitCast(linux.waitpid(-1, &wstatus, posix.W.NOHANG));
@@ -101,5 +101,5 @@ fn sigchld_handler(_: i32) callconv(.C) void {
 pub fn registerChildSignal(echild_event_fd: *FlagEventfd) !void {
     g_allow_wait_for_exit = false;
     g_echild_event_fd = echild_event_fd;
-    posix.sigaction(posix.SIG.CHLD, &.{ .handler = .{ .handler = sigchld_handler }, .mask = [_]u32{0} ** 32, .flags = 0 }, null);
+    posix.sigaction(posix.SIG.CHLD, &.{ .handler = .{ .handler = sigchld_handler }, .mask = posix.sigemptyset(), .flags = 0 }, null);
 }
