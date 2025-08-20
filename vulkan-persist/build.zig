@@ -14,20 +14,24 @@ pub fn build(b: *std.Build) void {
     });
 
     // Code generation tools
-    const tool = b.addExecutable(.{
-        .name = "generate_vk_wrappers",
+    const tool = b.createModule(.{
         .root_source_file = b.path("tools/generate_vk_wrappers.zig"),
         .target = b.graph.host,
     });
-    tool.root_module.addImport("xml", xml.module("xml"));
+    tool.addImport("xml", xml.module("xml"));
 
-    const tool_step = b.addRunArtifact(tool);
+    const tool_exe = b.addExecutable(.{
+        .name = "generate_vk_wrappers",
+        .root_module = tool,
+    });
+
+    const tool_step = b.addRunArtifact(tool_exe);
     tool_step.addFileArg(b.path("Vulkan-Headers/registry/vk.xml"));
     const tool_output = tool_step.addOutputFileArg("vk_wrappers.zig");
 
     // Code generation debugging
     const build_the_generator_cmd = b.step("build-generator", "Build vulkan wrappers generator");
-    build_the_generator_cmd.dependOn(&b.addInstallArtifact(tool, .{}).step);
+    build_the_generator_cmd.dependOn(&b.addInstallArtifact(tool_exe, .{}).step);
 
     const so_mod = b.createModule(.{
         .root_source_file = b.path("src/so.zig"),
