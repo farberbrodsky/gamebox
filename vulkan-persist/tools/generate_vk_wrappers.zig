@@ -3,8 +3,9 @@ const xml = @import("xml");
 const codegen = @import("generate_vk_wrappers/codegen.zig");
 
 /// Reads all properties of an element until we reach its end.
-/// There is no tracking of depth - rather, we ensure that no others tags of the same name begin.
-fn readInsideElement(xml_reader: *xml.Reader, end_element_name: []const u8) !?xml.Reader.Node {
+/// If depth = null, then there is no tracking of depth - rather, we ensure that no others tags of the same name begin.
+/// Otherwise, it tracks depth of the same element name. Make sure to be careful about partial parsing where depth does not start and end with 0.
+fn readInsideElement(xml_reader: *xml.Reader, end_element_name: []const u8, depth: ?*usize) !?xml.Reader.Node {
     const node = try xml_reader.read();
 
     if (node == .eof) {
@@ -13,13 +14,28 @@ fn readInsideElement(xml_reader: *xml.Reader, end_element_name: []const u8) !?xm
     }
 
     if (node == .element_end and std.mem.eql(u8, xml_reader.elementName(), end_element_name)) {
-        // this element ended
-        return null;
+        if (depth) |d| {
+            if (d.* == 0) {
+                // this element ended
+                return null;
+            } else {
+                // left nesting
+                d.* -= 1;
+                return node;
+            }
+        } else {
+            // this element ended
+            return null;
+        }
     }
 
     if (node == .element_start and std.mem.eql(u8, xml_reader.elementName(), end_element_name)) {
-        // Recursion is not supported
-        return error.XmlRecursion;
+        if (depth == null) {
+            // Recursion is not supported
+            return error.XmlRecursion;
+        } else {
+            depth.?.* += 1;
+        }
     }
 
     return node;
@@ -27,7 +43,7 @@ fn readInsideElement(xml_reader: *xml.Reader, end_element_name: []const u8) !?xm
 
 /// Similar to `readInsideElement`, and uses it internally.
 /// This function is used to find the beginning of one of the desired elements represented in ElementSet.
-fn findNextElement(ElementSet: anytype, xml_reader: *xml.Reader, end_element_name: []const u8) !?ElementSet {
+fn findNextElement(ElementSet: anytype, xml_reader: *xml.Reader, end_element_name: []const u8, depth: ?*usize) !?ElementSet {
     switch (@typeInfo(ElementSet)) {
         .@"enum" => {},
         else => @compileError("ElementSet must be an enum"),
@@ -35,7 +51,7 @@ fn findNextElement(ElementSet: anytype, xml_reader: *xml.Reader, end_element_nam
 
     return while (true) {
         // End of stream and errors are both propagated out of here
-        const node = try readInsideElement(xml_reader, end_element_name) orelse break null;
+        const node = try readInsideElement(xml_reader, end_element_name, depth) orelse break null;
 
         // Is the desired element starting?
         if (node == .element_start) {
@@ -49,16 +65,22 @@ fn findNextElement(ElementSet: anytype, xml_reader: *xml.Reader, end_element_nam
     };
 }
 
-/// Returns whether the element should be ignored because it's not for the basic "vulkan" api
-fn checkApiAttribute(xml_reader: *xml.Reader) !bool {
+fn attributeByName(xml_reader: *xml.Reader, name: []const u8) !?[]const u8 {
     for (0..xml_reader.attributeCount()) |i| {
         const attribute_name = xml_reader.attributeName(i);
-        if (std.mem.eql(u8, attribute_name, "api")) {
-            const attribute_value = try xml_reader.attributeValue(i);
-            if (!std.mem.eql(u8, attribute_value, "vulkan")) {
-                // Ignore the element
-                return false;
-            }
+        if (std.mem.eql(u8, attribute_name, name)) {
+            return try xml_reader.attributeValue(i);
+        }
+    }
+    return null;
+}
+
+/// Returns whether the element should be ignored because it's not for the basic "vulkan" api
+fn checkApiAttribute(xml_reader: *xml.Reader) !bool {
+    if (try attributeByName(xml_reader, "api")) |attribute_value| {
+        if (!std.mem.eql(u8, attribute_value, "vulkan")) {
+            // Ignore the element
+            return false;
         }
     }
     return true;
@@ -184,15 +206,54 @@ pub const Command = struct {
     }
 };
 
+pub const StructType = struct {
+    name: ?[]const u8 = null,
+    fields: ?[]Field = null,
+
+    pub fn init() StructType {
+        return .{};
+    }
+
+    pub fn format(struct_type: StructType, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("StructType  {?s}(", .{struct_type.name});
+        if (struct_type.fields) |fields_slice| {
+            var first = true;
+            for (fields_slice) |field| {
+                if (first) {
+                    first = false;
+                } else {
+                    try writer.print(", ", .{});
+                }
+                try writer.print("{?s}", .{field.type_name});
+            }
+        }
+        try writer.print(")", .{});
+    }
+
+    pub fn isIncomplete(struct_type: StructType) bool {
+        if (struct_type.name == null) return true;
+        if (struct_type.fields == null) return true;
+        for (struct_type.fields.?) |field| {
+            if (field.isIncomplete()) {
+                return true;
+            }
+        }
+
+        // all good
+        return false;
+    }
+};
+
 /// Represents the state of parsing. Every tag that is parsed gets stored into this state object.
 const ParseState = struct {
     /// Freeing is not expected, so this is an arena
     arena: std.mem.Allocator,
 
     commands: std.ArrayListUnmanaged(Command),
+    structs: std.ArrayListUnmanaged(StructType),
 
     pub fn init(arena: std.mem.Allocator) !ParseState {
-        return .{ .arena = arena, .commands = try std.ArrayListUnmanaged(Command).initCapacity(arena, 1000) };
+        return .{ .arena = arena, .commands = try std.ArrayListUnmanaged(Command).initCapacity(arena, 1000), .structs = try std.ArrayListUnmanaged(StructType).initCapacity(arena, 1000) };
     }
 
     pub fn addCommand(self: *ParseState) !*Command {
@@ -203,6 +264,16 @@ const ParseState = struct {
 
     pub fn unaddCommand(self: *ParseState) void {
         _ = self.commands.pop();
+    }
+
+    pub fn addStruct(self: *ParseState) !*StructType {
+        const result = try self.structs.addOne(self.arena);
+        result.* = StructType.init();
+        return result;
+    }
+
+    pub fn unaddStruct(self: *ParseState) void {
+        _ = self.structs.pop();
     }
 };
 
@@ -219,7 +290,7 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
 
     if (!try checkApiAttribute(xml_reader)) {
         // Ignore the element
-        while (try readInsideElement(xml_reader, "command") != null) {}
+        while (try readInsideElement(xml_reader, "command", null) != null) {}
         return;
     }
 
@@ -228,16 +299,16 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
         param,
         implicitexternsyncparams,
     };
-    var params = std.ArrayList(Field).init(state.arena);
-    defer params.deinit();
-    while (try findNextElement(ChildTags, xml_reader, "command")) |child_node| switch (child_node) {
+    var params = std.ArrayListUnmanaged(Field).empty;
+    defer params.deinit(state.arena);
+    while (try findNextElement(ChildTags, xml_reader, "command", null)) |child_node| switch (child_node) {
         .proto => {
             std.debug.print("Found proto\n", .{});
             const ProtoChildTags = enum {
                 type,
                 name,
             };
-            while (try findNextElement(ProtoChildTags, xml_reader, "proto")) |proto_child_node| switch (proto_child_node) {
+            while (try findNextElement(ProtoChildTags, xml_reader, "proto", null)) |proto_child_node| switch (proto_child_node) {
                 .type => {
                     std.debug.print("Found proto's type\n", .{});
                     parse_command.return_type_name = try xml_reader.readElementTextAlloc(state.arena);
@@ -258,11 +329,11 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
             if (!try checkApiAttribute(xml_reader)) {
                 // Ignore the element
                 std.debug.print("Ignoring param due to api\n", .{});
-                while (try readInsideElement(xml_reader, "param") != null) {}
+                while (try readInsideElement(xml_reader, "param", null) != null) {}
                 continue;
             }
 
-            while (try findNextElement(ParamChildTags, xml_reader, "param")) |param_child_node| switch (param_child_node) {
+            while (try findNextElement(ParamChildTags, xml_reader, "param", null)) |param_child_node| switch (param_child_node) {
                 .type => {
                     param.type_name = try xml_reader.readElementTextAlloc(state.arena);
                     std.debug.print("Found param's type {s}\n", .{param.type_name.?});
@@ -272,21 +343,72 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
                     std.debug.print("Found param's name {s}\n", .{param.field_name.?});
                 },
             };
-            try params.append(param);
+            try params.append(state.arena, param);
         },
         .implicitexternsyncparams => {
             // skip contents
-            while (try readInsideElement(xml_reader, "implicitexternsyncparams") != null) {}
+            while (try readInsideElement(xml_reader, "implicitexternsyncparams", null) != null) {}
         },
     };
 
-    parse_command.params = try params.toOwnedSlice();
+    parse_command.params = try params.toOwnedSlice(state.arena);
     std.debug.print("Parsed a command {}\n", .{parse_command});
 }
 
-const ElementParsers = std.StaticStringMap(*const fn (*ParseState, *xml.Reader) anyerror!void).initComptime(.{
-    .{ "command", parseCommand },
+fn parseStruct(state: *ParseState, xml_reader: *xml.Reader) !void {
+    // Allocate a struct object
+    const parse_struct = try state.addStruct();
+
+    defer {
+        // un-add the struct if it isn't complete
+        if (parse_struct.isIncomplete()) {
+            state.unaddStruct();
+        }
+    }
+
+    const ChildTags = enum {
+        member,
+        foopleasecompile, // without this, there's an llvm error
+    };
+    var fields = std.ArrayListUnmanaged(Field).empty;
+    defer fields.deinit(state.arena);
+    var depth: usize = 0;
+    while (try findNextElement(ChildTags, xml_reader, "type", &depth)) |child_node| switch (child_node) {
+        else => {},
+    };
+
+    parse_struct.fields = try fields.toOwnedSlice(state.arena);
+    std.debug.print("Parsed a struct {}\n", .{parse_struct});
+}
+
+const ElementParser = *const fn (*ParseState, *xml.Reader) anyerror!void;
+
+const TypeParsers = std.StaticStringMap(ElementParser).initComptime(.{
+    .{ "struct", parseStruct },
 });
+
+const ElementParsers = std.StaticStringMap(ElementParser).initComptime(.{
+    .{ "command", parseCommand },
+    .{ "type", parseType },
+});
+
+fn parseTypeHelper(xml_reader: *xml.Reader) !?ElementParser {
+    if (!try checkApiAttribute(xml_reader)) {
+        return null;
+    }
+    const type_category_attr = try attributeByName(xml_reader, "category") orelse return null;
+    return TypeParsers.get(type_category_attr);
+}
+
+fn parseType(state: *ParseState, xml_reader: *xml.Reader) !void {
+    if (try parseTypeHelper(xml_reader)) |element_parser| {
+        return element_parser(state, xml_reader);
+    } else {
+        // skip contents
+        var depth: usize = 0;
+        while (try readInsideElement(xml_reader, "type", &depth) != null) {}
+    }
+}
 
 pub fn main() !void {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
