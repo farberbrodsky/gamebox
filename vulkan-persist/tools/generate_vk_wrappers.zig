@@ -208,7 +208,7 @@ pub const Command = struct {
 
 pub const StructType = struct {
     name: ?[]const u8 = null,
-    fields: ?[]Field = null,
+    members: ?[]Field = null,
 
     pub fn init() StructType {
         return .{};
@@ -216,15 +216,15 @@ pub const StructType = struct {
 
     pub fn format(struct_type: StructType, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("StructType  {?s}(", .{struct_type.name});
-        if (struct_type.fields) |fields_slice| {
+        if (struct_type.members) |members_slice| {
             var first = true;
-            for (fields_slice) |field| {
+            for (members_slice) |member| {
                 if (first) {
                     first = false;
                 } else {
                     try writer.print(", ", .{});
                 }
-                try writer.print("{?s}", .{field.type_name});
+                try writer.print("{?s}", .{member.type_name});
             }
         }
         try writer.print(")", .{});
@@ -232,9 +232,9 @@ pub const StructType = struct {
 
     pub fn isIncomplete(struct_type: StructType) bool {
         if (struct_type.name == null) return true;
-        if (struct_type.fields == null) return true;
-        for (struct_type.fields.?) |field| {
-            if (field.isIncomplete()) {
+        if (struct_type.members == null) return true;
+        for (struct_type.members.?) |member| {
+            if (member.isIncomplete()) {
                 return true;
             }
         }
@@ -277,6 +277,36 @@ const ParseState = struct {
     }
 };
 
+fn parseField(dst_field: *Field, state: *ParseState, xml_reader: *xml.Reader, tag_name: []const u8) !bool {
+    // reinitialize field structure
+    dst_field.* = .{};
+
+    const FieldChildTags = enum {
+        type,
+        name,
+    };
+
+    if (!try checkApiAttribute(xml_reader)) {
+        // Ignore the element
+        std.debug.print("Ignoring field due to api\n", .{});
+        while (try readInsideElement(xml_reader, tag_name, null) != null) {}
+        return false;
+    }
+
+    while (try findNextElement(FieldChildTags, xml_reader, tag_name, null)) |child_tag| switch (child_tag) {
+        .type => {
+            dst_field.type_name = try xml_reader.readElementTextAlloc(state.arena);
+            std.debug.print("Found field's type {s}\n", .{dst_field.type_name.?});
+        },
+        .name => {
+            dst_field.field_name = try xml_reader.readElementTextAlloc(state.arena);
+            std.debug.print("Found field's name {s}\n", .{dst_field.field_name.?});
+        },
+    };
+
+    return true;
+}
+
 fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
     // Allocate a command object
     const parse_command = try state.addCommand();
@@ -301,6 +331,7 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
     };
     var params = std.ArrayListUnmanaged(Field).empty;
     defer params.deinit(state.arena);
+    var next_param = try params.addOne(state.arena);
     while (try findNextElement(ChildTags, xml_reader, "command", null)) |child_node| switch (child_node) {
         .proto => {
             std.debug.print("Found proto\n", .{});
@@ -319,37 +350,17 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
             };
         },
         .param => {
-            std.debug.print("Found param\n", .{});
-            const ParamChildTags = enum {
-                type,
-                name,
-            };
-            var param = Field{};
-
-            if (!try checkApiAttribute(xml_reader)) {
-                // Ignore the element
-                std.debug.print("Ignoring param due to api\n", .{});
-                while (try readInsideElement(xml_reader, "param", null) != null) {}
-                continue;
+            if (try parseField(next_param, state, xml_reader, "param")) {
+                next_param = try params.addOne(state.arena);
             }
-
-            while (try findNextElement(ParamChildTags, xml_reader, "param", null)) |param_child_node| switch (param_child_node) {
-                .type => {
-                    param.type_name = try xml_reader.readElementTextAlloc(state.arena);
-                    std.debug.print("Found param's type {s}\n", .{param.type_name.?});
-                },
-                .name => {
-                    param.field_name = try xml_reader.readElementTextAlloc(state.arena);
-                    std.debug.print("Found param's name {s}\n", .{param.field_name.?});
-                },
-            };
-            try params.append(state.arena, param);
         },
         .implicitexternsyncparams => {
             // skip contents
             while (try readInsideElement(xml_reader, "implicitexternsyncparams", null) != null) {}
         },
     };
+    // unadd the next_param
+    _ = params.pop();
 
     parse_command.params = try params.toOwnedSlice(state.arena);
     std.debug.print("Parsed a command {}\n", .{parse_command});
@@ -370,14 +381,22 @@ fn parseStruct(state: *ParseState, xml_reader: *xml.Reader) !void {
         member,
         foopleasecompile, // without this, there's an llvm error
     };
-    var fields = std.ArrayListUnmanaged(Field).empty;
-    defer fields.deinit(state.arena);
+    var members = std.ArrayListUnmanaged(Field).empty;
+    defer members.deinit(state.arena);
     var depth: usize = 0;
+    var next_member = try members.addOne(state.arena);
     while (try findNextElement(ChildTags, xml_reader, "type", &depth)) |child_node| switch (child_node) {
+        .member => {
+            if (try parseField(next_member, state, xml_reader, "member")) {
+                next_member = try members.addOne(state.arena);
+            }
+        },
         else => {},
     };
+    // unadd the next_member
+    _ = members.pop();
 
-    parse_struct.fields = try fields.toOwnedSlice(state.arena);
+    parse_struct.members = try members.toOwnedSlice(state.arena);
     std.debug.print("Parsed a struct {}\n", .{parse_struct});
 }
 
