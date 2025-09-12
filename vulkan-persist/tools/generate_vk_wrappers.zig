@@ -118,7 +118,9 @@ pub const Field = struct {
     field_name: ?[]const u8 = null,
     is_optional1: ?bool = null,
     is_optional2: ?bool = null,
-    length_annotation: ?[]const u8 = null,
+    length_annotation: ?[]LengthAnnotation = null,
+
+    const LengthAnnotation = union(enum) { NullTerminated: void, Name: []const u8 };
 
     pub fn isIncomplete(field: Field) bool {
         if (field.type_name == null) return true;
@@ -145,7 +147,16 @@ pub const Field = struct {
             try writer.print(":opt2={any}", .{is_optional2});
         }
         if (field.length_annotation) |length_annotation| {
-            try writer.print(":len={s}", .{length_annotation});
+            try writer.writeAll(":len=");
+            for (0.., length_annotation) |i, length_annotation_entry| {
+                if (i > 0) {
+                    try writer.writeAll(",");
+                }
+                try writer.writeAll(switch (length_annotation_entry) {
+                    .NullTerminated => "NullTerminated",
+                    .Name => |n| n,
+                });
+            }
         }
     }
 };
@@ -347,7 +358,35 @@ fn attributeDispatchFieldOptional(dst: *struct { *Field, *ParseState }, attribut
 fn attributeDispatchFieldLen(dst: *struct { *Field, *ParseState }, attribute_value: []const u8) !void {
     const dst_field = dst[0];
     const dst_state = dst[1];
-    dst_field.length_annotation = try dst_state.arena.dupe(u8, attribute_value);
+    const arena = dst_state.arena;
+
+    var split_iter = std.mem.splitScalar(u8, attribute_value, ',');
+    const split_count = std.mem.count(u8, attribute_value, ",") + 1;
+    const length_annotation = try arena.alloc(Field.LengthAnnotation, split_count);
+    var length_annotation_i: usize = 0;
+
+    errdefer {
+        // free members of length_annotation array
+        for (0..length_annotation_i) |i| {
+            switch (length_annotation[i]) {
+                .NullTerminated => {},
+                .Name => arena.free(length_annotation[i].Name),
+            }
+        }
+        // free length_annotation array
+        arena.free(length_annotation);
+    }
+
+    while (split_iter.next()) |entry| : (length_annotation_i += 1) {
+        if (std.mem.eql(u8, entry, "null-terminated")) {
+            length_annotation[length_annotation_i] = .NullTerminated;
+        } else {
+            length_annotation[length_annotation_i] = .{ .Name = try arena.dupe(u8, entry) };
+        }
+    }
+
+    // no errors from this point onwards
+    dst_field.length_annotation = length_annotation;
 }
 
 fn parseField(dst_field: *Field, state: *ParseState, xml_reader: *xml.Reader, tag_name: []const u8) !bool {
