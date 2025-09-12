@@ -88,7 +88,7 @@ fn checkApiAttribute(xml_reader: *xml.Reader) !bool {
 
 // Creates a function which iterates over attributes defined in kvs_list,
 // calling the handlers with a Context pointer parameter and returning any errors along the way.
-fn attributeDispatch(Context: type, comptime kvs_list: []const struct { []const u8, *const fn (*Field, []const u8) anyerror!void }) (fn (*Context, *xml.Reader) anyerror!void) {
+fn attributeDispatch(Context: type, comptime kvs_list: []const struct { []const u8, *const fn (*Context, []const u8) anyerror!void }) (fn (*Context, *xml.Reader) anyerror!void) {
     const Handler = *const fn (*Context, []const u8) anyerror!void;
     const smap = std.StaticStringMap(Handler).initComptime(kvs_list);
     return struct {
@@ -138,11 +138,14 @@ pub const Field = struct {
 
     pub fn format(field: *const Field, writer: *std.Io.Writer) !void {
         try writer.print("{?s}: {?s}", .{ field.field_name, field.type_name });
-        if (field.is_optional1 != null) {
-            try writer.print(":opt1={any}", .{field.is_optional1.?});
+        if (field.is_optional1) |is_optional1| {
+            try writer.print(":opt1={any}", .{is_optional1});
         }
-        if (field.is_optional2 != null) {
-            try writer.print(":opt2={any}", .{field.is_optional2.?});
+        if (field.is_optional2) |is_optional2| {
+            try writer.print(":opt2={any}", .{is_optional2});
+        }
+        if (field.length_annotation) |length_annotation| {
+            try writer.print(":len={s}", .{length_annotation});
         }
     }
 };
@@ -320,7 +323,8 @@ fn parseBool(s: []const u8) ?bool {
     return null;
 }
 
-fn attributeDispatchFieldOptional(dst_field: *Field, attribute_value: []const u8) !void {
+fn attributeDispatchFieldOptional(dst: *struct { *Field, *ParseState }, attribute_value: []const u8) !void {
+    const dst_field = dst[0];
     if (std.mem.indexOfScalar(u8, attribute_value, ',')) |comma_index| {
         const is_optional1 = parseBool(attribute_value[0..comma_index]);
         const is_optional2 = parseBool(attribute_value[comma_index + 1 ..]);
@@ -340,6 +344,12 @@ fn attributeDispatchFieldOptional(dst_field: *Field, attribute_value: []const u8
     }
 }
 
+fn attributeDispatchFieldLen(dst: *struct { *Field, *ParseState }, attribute_value: []const u8) !void {
+    const dst_field = dst[0];
+    const dst_state = dst[1];
+    dst_field.length_annotation = try dst_state.arena.dupe(u8, attribute_value);
+}
+
 fn parseField(dst_field: *Field, state: *ParseState, xml_reader: *xml.Reader, tag_name: []const u8) !bool {
     // reinitialize field structure
     dst_field.* = .{};
@@ -349,7 +359,8 @@ fn parseField(dst_field: *Field, state: *ParseState, xml_reader: *xml.Reader, ta
         name,
     };
 
-    attributeDispatch(Field, &.{ .{ "api", @ptrCast(&attributeDispatchCheckApiAttribute) }, .{ "optional", attributeDispatchFieldOptional } })(dst_field, xml_reader) catch |err| switch (err) {
+    var dispatch_params: struct { *Field, *ParseState } = .{ dst_field, state };
+    attributeDispatch(@TypeOf(dispatch_params), &.{ .{ "api", @ptrCast(&attributeDispatchCheckApiAttribute) }, .{ "optional", attributeDispatchFieldOptional }, .{ "len", attributeDispatchFieldLen } })(&dispatch_params, xml_reader) catch |err| switch (err) {
         error.IgnoreElement => {
             // Ignore the element
             std.debug.print("Ignoring field due to attributes\n", .{});
