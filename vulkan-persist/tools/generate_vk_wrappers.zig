@@ -136,7 +136,7 @@ pub const Field = struct {
         return field_name;
     }
 
-    pub fn format(field: Field, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(field: *const Field, writer: *std.Io.Writer) !void {
         try writer.print("{?s}: {?s}", .{ field.field_name, field.type_name });
         if (field.is_optional1 != null) {
             try writer.print(":opt1={any}", .{field.is_optional1.?});
@@ -161,7 +161,7 @@ pub const Command = struct {
         return .{};
     }
 
-    pub fn format(command: Command, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(command: *const Command, writer: *std.Io.Writer) !void {
         try writer.print("Command     {?s} {?s}(", .{ command.return_type_name, command.name });
         if (command.params) |params_slice| {
             var first = true;
@@ -224,8 +224,8 @@ pub const Command = struct {
         if (self.function_type) |function_type| {
             return function_type;
         }
-        var array_list = std.ArrayList(u8).init(alloc);
-        const writer = array_list.writer();
+        var array_list = std.ArrayList(u8).empty;
+        const writer = array_list.writer(alloc);
         try writer.writeAll("*const fn(");
         if (self.params) |command_params| for (0.., command_params) |i, _| {
             if (i != 0) {
@@ -233,8 +233,8 @@ pub const Command = struct {
             }
             try writer.writeAll("usize");
         };
-        try writer.writeAll(") callconv(.C) isize");
-        const generated_function_type = try array_list.toOwnedSlice();
+        try writer.writeAll(") callconv(.c) isize");
+        const generated_function_type = try array_list.toOwnedSlice(alloc);
         self.function_type = generated_function_type;
         return generated_function_type;
     }
@@ -248,7 +248,7 @@ pub const StructType = struct {
         return .{};
     }
 
-    pub fn format(struct_type: StructType, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(struct_type: *const StructType, writer: *std.Io.Writer) !void {
         try writer.print("StructType  {?s}(", .{struct_type.name});
         if (struct_type.members) |members_slice| {
             var first = true;
@@ -258,7 +258,7 @@ pub const StructType = struct {
                 } else {
                     try writer.print(", ", .{});
                 }
-                try writer.print("{?f}", .{member});
+                try writer.print("{f}", .{member});
             }
         }
         try writer.print(")", .{});
@@ -430,7 +430,7 @@ fn parseCommand(state: *ParseState, xml_reader: *xml.Reader) !void {
     _ = params.pop();
 
     parse_command.params = try params.toOwnedSlice(state.arena);
-    std.debug.print("Parsed a command {}\n", .{parse_command});
+    std.debug.print("Parsed a command {f}\n", .{parse_command});
 }
 
 fn parseStruct(state: *ParseState, xml_reader: *xml.Reader) !void {
@@ -468,7 +468,7 @@ fn parseStruct(state: *ParseState, xml_reader: *xml.Reader) !void {
     _ = members.pop();
 
     parse_struct.members = try members.toOwnedSlice(state.arena);
-    std.debug.print("Parsed a struct {}\n", .{parse_struct});
+    std.debug.print("Parsed a struct {f}\n", .{parse_struct});
 }
 
 const ElementParser = *const fn (*ParseState, *xml.Reader) anyerror!void;
@@ -516,10 +516,11 @@ pub fn main() !void {
     defer input_file.close();
 
     // For usage, see: https://github.com/ianprime0509/zig-xml/blob/c12dbb48606f716773a1ddf7d9b14e07524d1436/examples/reader.zig
-    var xml_doc = xml.streamingDocument(arena, input_file.reader());
-    defer xml_doc.deinit();
-    var xml_reader = xml_doc.reader(arena, .{});
-    defer xml_reader.deinit();
+    var read_buffer: [4096]u8 = undefined;
+    var input_reader = input_file.reader(&read_buffer);
+    var xml_streaming_reader: xml.Reader.Streaming = .init(arena, &input_reader.interface, .{});
+    defer xml_streaming_reader.deinit();
+    const xml_reader = &xml_streaming_reader.interface;
 
     const output_file_path = args[2];
     const output_file = std.fs.cwd().createFile(output_file_path, .{}) catch |err| {
@@ -537,14 +538,16 @@ pub fn main() !void {
             .element_start => {
                 const element_name = xml_reader.elementName();
                 if (ElementParsers.get(element_name)) |elementParser| {
-                    elementParser(&parse_state, &xml_reader.reader) catch |err| fatalXmlError(xml_reader, err);
+                    elementParser(&parse_state, xml_reader) catch |err| fatalXmlError(xml_reader, err);
                 }
             },
             else => {},
         }
     }
 
-    var code_writer: codegen.CodeWriter = .{ .writer = output_file.writer().any() };
+    var output_buffer: [4096]u8 = undefined;
+    var output_file_writer = output_file.writer(&output_buffer);
+    var code_writer: codegen.CodeWriter = .{ .writer = &output_file_writer.interface };
 
     code_writer.line("const std = @import(\"std\");", .{});
     code_writer.line("const vk = @import(\"vk_headers\");", .{});
@@ -578,6 +581,10 @@ pub fn main() !void {
     codegen.generateFunctionList(&code_writer, "DeviceFunctions", device_function_map.items);
     codegen.generateDispatchTableStruct(&code_writer, "DeviceDispatchTable", device_function_map.items);
 
+    // flush output
+    try output_file_writer.end();
+
+    // check errors
     if (code_writer.err) |e| return e;
     return std.process.cleanExit();
 }

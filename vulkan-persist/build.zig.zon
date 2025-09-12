@@ -37,8 +37,8 @@
     // internet connectivity.
     .dependencies = .{
         .xml = .{
-            .url = "git+https://github.com/ianprime0509/zig-xml.git#c12dbb48606f716773a1ddf7d9b14e07524d1436",
-            .hash = "xml-0.1.0-ZTbP35VkAgAp2cDlvsPuL7SWVZWwPg-V99LmVRSHbCtL",
+            .url = "git+https://github.com/ianprime0509/zig-xml#b0723c18016c0f7b1f7219576df8db31ce68dcd3",
+            .hash = "xml-0.1.0-ZTbP35UoAgDk1IhivGX2bzjEqMCBy2Q5QQBdrUoNURiJ",
         },
     },
     .paths = .{

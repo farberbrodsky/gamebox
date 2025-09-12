@@ -14,7 +14,7 @@ pub fn generateWrapperFunction(cw: *CodeWriter, wrapper_name: []const u8, comman
         }
         cw.print("{s}: usize", .{param.getFieldName()});
     };
-    cw.raw(") callconv(.C) isize {");
+    cw.raw(") callconv(.c) isize {");
     cw.endLine();
 
     // Enter function's body

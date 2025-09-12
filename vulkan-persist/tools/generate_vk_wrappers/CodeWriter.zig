@@ -1,7 +1,7 @@
 const std = @import("std");
 const Self = @This();
 
-writer: std.io.AnyWriter,
+writer: *std.Io.Writer,
 indent: u32 = 0,
 err: ?anyerror = null,
 
@@ -22,7 +22,7 @@ pub fn line(self: *Self, comptime format: []const u8, args: anytype) void {
 pub fn startLine(self: *Self) void {
     if (self.err != null)
         return;
-    self.writer.writeByteNTimes(' ', 4 * self.indent) catch |err| {
+    self.writer.splatByteAll(' ', 4 * self.indent) catch |err| {
         self.err = err;
     };
 }
