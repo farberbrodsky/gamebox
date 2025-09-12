@@ -12,3 +12,7 @@ zig build && VK_ADD_IMPLICIT_LAYER_PATH=$PWD/../src/VkLayer_gamebox_persist.json
 ```sh
 zig build build-generator && ./zig-out/bin/generate_vk_wrappers Vulkan-Headers/registry/vk.xml /tmp/vk_wrappers.zig && cat /tmp/vk_wrappers.zig
 ```
+
+# Documentation Sources
+
+* For the vulkan registry's documentation, see: [The Khronos Vulkan API Registry](https://registry.khronos.org/vulkan/specs/latest/registry.html).
